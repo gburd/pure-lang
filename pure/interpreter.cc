@@ -79,6 +79,7 @@ namespace llvm {
 #define PURE_PIC ""
 #endif
 
+
 #include "gsl_structs.h"
 
 uint8_t interpreter::g_verbose = 0;
@@ -242,16 +243,39 @@ void interpreter::init()
   JTMB->getOptions().GuaranteedTailCallOpt = true;
   #endif
 
-  // Use large code model so absolute symbols (which may be far from
-  // JIT-allocated code) can be addressed.  On AArch64 this avoids
-  // Page21/ADRP range errors; on x86_64 the overhead is negligible.
-  // A custom memory allocator placing JIT code near host symbols would
-  // allow CodeModel::Small, but the complexity isn't justified yet.
-  JTMB->setCodeModel(llvm::CodeModel::Large);
+  // Select code model based on architecture.
+  // RISC-V: CodeModel::Medium (medany) with PIC relocation model.
+  //   RISC-V has no true "large" code model - all code uses auipc-based
+  //   PC-relative addressing with a ±2GB range.  PIC mode ensures external
+  //   symbols are accessed through GOT/PLT (which JITLink places co-located
+  //   with JIT code), avoiding overflow for far symbols.
+  // AArch64/x86_64: CodeModel::Large avoids ADRP/Page21 range errors
+  //   by using absolute 64-bit addressing sequences.
+  auto TripleStr = JTMB->getTargetTriple().getTriple();
+  bool isRISCV = (TripleStr.find("riscv") != std::string::npos);
+
+  if (isRISCV) {
+    JTMB->setCodeModel(llvm::CodeModel::Medium);
+    // Use PIC so all external symbol accesses go through the GOT.
+    // JITLink creates a GOT co-located with JIT code, so GOT-relative
+    // accesses (R_RISCV_GOT_HI20) are always within ±2GB range.
+    // Without PIC, direct PC-relative accesses (R_RISCV_PCREL_HI20) fail
+    // when symbols are >2GB from JIT code.
+    JTMB->setRelocationModel(llvm::Reloc::PIC_);
+  } else {
+    JTMB->setCodeModel(llvm::CodeModel::Large);
+  }
 
   // Build LLJIT
   LLJITBuilder JITBuilder;
   JITBuilder.setJITTargetMachineBuilder(std::move(*JTMB));
+
+  // LLJIT uses ObjectLinkingLayer (JITLink) by default.  On RISC-V, PIC
+  // mode combined with clearing dso_local (in submit_module) causes the
+  // LLVM backend to emit GOT/PLT accesses (R_RISCV_GOT_HI20, R_RISCV_CALL_PLT).
+  // JITLink creates GOT/PLT entries co-located with JIT code, avoiding
+  // R_RISCV_PCREL_HI20 out-of-range errors regardless of where the actual
+  // symbols reside in the process address space.
 
   auto JITOrErr = JITBuilder.create();
   if (!JITOrErr) handleAllErrors(JITOrErr.takeError(), [](const ErrorInfoBase &E) {
@@ -989,6 +1013,15 @@ void interpreter::submit_module() {
       }
     }
   }
+#if defined(__riscv)
+  // On RISC-V, clear dso_local on all external functions so the backend
+  // generates PLT calls (R_RISCV_CALL_PLT) instead of direct calls.
+  // JITLink creates PLT stubs co-located with JIT code.
+  for (auto &F : *ClonedModule) {
+    if (F.getLinkage() == llvm::GlobalValue::ExternalLinkage)
+      F.setDSOLocal(false);
+  }
+#endif
   // Handle global variables:
   // - Absolute symbols (host-side addresses from define_symbol) and
   //   already-submitted globals become external declarations.
@@ -1005,6 +1038,18 @@ void interpreter::submit_module() {
     } else if (GV.getLinkage() == llvm::GlobalValue::InternalLinkage) {
       GV.setLinkage(llvm::GlobalValue::ExternalLinkage);
     }
+#if defined(__riscv)
+    // On RISC-V in PIC mode, external symbols accessed via direct
+    // PC-relative addressing (R_RISCV_PCREL_HI20) can overflow when
+    // >2GB from JIT code.  Clearing dso_local forces the backend to
+    // use GOT-relative accesses (R_RISCV_GOT_HI20) instead.  JITLink
+    // places the GOT in JIT memory (always within ±2GB of code), and
+    // GOT entries hold full 64-bit addresses with no range constraint.
+    // Note: dso_local is implicitly set when creating InternalLinkage
+    // globals and is NOT cleared when linkage changes to External.
+    if (GV.getLinkage() == llvm::GlobalValue::ExternalLinkage)
+      GV.setDSOLocal(false);
+#endif
   }
   // Remove old JIT definitions for freed symbols.  Symbols are added
   // to FreedSymbols by free_function_code() when a function is cleared
@@ -1094,6 +1139,7 @@ void interpreter::define_symbol(const std::string& name, void* addr) {
     return;
   }
   AbsoluteSymbols.insert(name);
+
 }
 
 void interpreter::free_function_code(llvm::Function* f) {
