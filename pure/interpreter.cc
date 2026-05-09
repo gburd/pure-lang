@@ -1021,8 +1021,15 @@ void interpreter::submit_module() {
     FreedSymbols.clear();
   }
   // Save old resource tracker (keep compiled code alive).
-  if (ModuleRT)
-    OldModuleRTs.push_back(std::move(ModuleRT));
+  // Note: Env lifetime is now managed via refp reference counting, so we don't
+  // need to explicitly track Envs here. The refp mechanism prevents premature
+  // deletion of Envs while their code is still referenced.
+  if (ModuleRT) {
+    ModuleResources oldRes;
+    oldRes.RT = std::move(ModuleRT);
+    // active_envs is intentionally left empty - refp handles lifetime
+    OldModuleResources.push_back(std::move(oldRes));
+  }
   ModuleRT = JIT->getMainJITDylib().createResourceTracker();
   // Record which symbols we are submitting in this batch.
   for (auto &F : *ClonedModule) {
@@ -1042,6 +1049,17 @@ void interpreter::submit_module() {
     std::cerr << "addIRModule failed: " << errStr << "\n";
   }
   module_dirty = false;
+}
+
+void interpreter::cleanup_old_modules(size_t keep_recent) {
+  if (OldModuleResources.size() > keep_recent) {
+    // Remove oldest modules - ResourceTrackers will be automatically destroyed
+    size_t to_remove = OldModuleResources.size() - keep_recent;
+    OldModuleResources.erase(
+      OldModuleResources.begin(),
+      OldModuleResources.begin() + to_remove
+    );
+  }
 }
 
 void* interpreter::lookup_symbol(const std::string& name) {
@@ -1091,15 +1109,11 @@ void interpreter::free_function_code(llvm::Function* f) {
 // Optimize a single function using modern pass pipeline
 void interpreter::optimize_function(llvm::Function *f) {
   if (!f || f->isDeclaration()) return;
-  // Invalidate all cached analysis results before running the pass
-  // pipeline. The Pure interpreter frequently erases and recreates
-  // LLVM functions (e.g., $$init functions are single-use), which
-  // leaves stale entries in the FunctionAnalysisManager cache. The
-  // EarlyCSE and other passes can crash when they encounter dangling
-  // pointers from deleted IR. Clearing the cache on each call is
-  // the simplest way to guarantee correctness with Pure's dynamic
-  // code generation pattern.
-  FAM->clear();
+  // Invalidate cached analysis results for THIS function only, not the entire cache.
+  // The Pure interpreter frequently erases and recreates LLVM functions, which can
+  // leave stale entries. Selective invalidation preserves cached analyses for other
+  // functions, improving performance over FAM->clear().
+  FAM->invalidate(*f, llvm::PreservedAnalyses::none());
   auto FPipeline = PB->buildFunctionSimplificationPipeline(
     llvm::OptimizationLevel::O2,
     llvm::ThinOrFullLTOPhase::None
@@ -11255,8 +11269,21 @@ void FMap::clear()
     delete m[i];
   }
   for (set<Env*>::iterator it = e.begin(), end = e.end();
-       it != end; it++)
-    delete *it;
+       it != end; it++) {
+    if ((*it)->refc == 0) {
+      // No closures reference this Env, safe to delete
+      delete *it;
+    } else {
+      // Closures still hold a pointer (ep) to this Env.  We must NOT
+      // delete the object -- pure_free_clos() will do so when the last
+      // closure is freed (--env->refc == 0).  However, we do clear its
+      // resources (LLVM functions, child fmaps, refp) since the parent
+      // that owned this Env structurally is going away.  Env::clear()
+      // is idempotent (guarded by f==nullptr), so the later delete from
+      // pure_free_clos -> ~Env -> clear() is a safe no-op.
+      (*it)->clear();
+    }
+  }
   m.clear(); root.clear(); pred.clear(); succ.clear();
   idx = 0; lastidx = -1;
 }
@@ -11340,44 +11367,76 @@ void Env::add_key(uint32_t key, uint32_t *refp)
   interp.add_key(key, refp);
 }
 
+Env::Env(const Env& e)
+  : tag(e.tag), name(e.name), key(e.key), descr(e.descr), n(e.n), m(e.m),
+    f(e.f), h(e.h), args(e.args), envs(e.envs), rp(e.rp),
+    b(e.b), local(e.local), builder(*pure_llvm_context),
+    parent(e.parent), refc(0), refp(e.refp),  // refc starts at 0 for copy
+    fmap(e.fmap), xmap(e.xmap), xtab(e.xtab), prop(e.prop)
+{
+  // Copy constructor: increment refp refcount since we're sharing it
+  // This is critical because Env objects are stored by value in std::map
+  // and will be copied during map operations (resize, exception cleanup, etc.)
+  // Note: refc is set to 0 for the new copy - it will be incremented when
+  // closures reference this copy
+  if (refp) {
+    interpreter& interp = *interpreter::g_interp;
+    interp.addref_refp(refp);
+  }
+}
+
 Env& Env::operator= (const Env& e)
 {
+  interpreter& interp = *interpreter::g_interp;
   if (f) {
     // already initialized; we only allow this for global function definitions
     assert(!local && !parent && e.n == n && e.tag == tag && b == e.b &&
 	   !e.local && !e.parent);
-    clear();
+    clear();  // This releases refp
     // Reset function pointers so fun_prolog creates new LLVM functions.
     // With ORC JIT, we cannot redefine symbols in-place; a fresh
     // function with a unique name is needed for each recompilation.
     f = 0; h = 0;
   } else {
-    // uninitialized environment; simply copy everything
+    // uninitialized environment; release old refp before copying
+    if (refp) {
+      interp.release_refp(refp);
+      refp = nullptr;
+    }
+    // simply copy everything
     tag = e.tag; name = e.name; n = e.n; f = e.f; h = e.h;
     args = e.args; envs = e.envs;
     b = e.b; local = e.local; parent = e.parent;
   }
   fmap = e.fmap; xmap = e.xmap; xtab = e.xtab; prop = e.prop; m = e.m;
   if (e.descr) descr = e.descr;
-  key = e.key; refp = e.refp;
+  key = e.key;
+  // When copying refp, increment its refcount since we now share it
+  if (e.refp) {
+    refp = e.refp;
+    interp.addref_refp(refp);
+  } else {
+    refp = nullptr;
+  }
   return *this;
 }
 
 void Env::clear()
 {
-  /* Note that we deliberately leak memory on refp here, because it may be
-     shared by any number of different Env objects and runtime closures. That
-     saves us an extra refcounter on the refcounter itself. Oh well. */
+  /* Fixed: refp is now properly reference-counted via refp_refcounts map
+     in the interpreter class, eliminating the previous deliberate memory leak. */
   static list<Function*> to_be_deleted;
   if (!f) return; // not initialized
   if (rp) delete rp;
   interpreter& interp = *interpreter::g_interp;
+  // Capture refp for use in checks below, will release at end
+  uint32_t *refp_to_release = refp;
   if (local) {
     // purge local functions
 #if DEBUG>2
     std::cerr << "clearing local '" << name << "'\n";
 #endif
-    if (!refp || *refp == 0) {
+    if (!refp_to_release || *refp_to_release == 0) {
       if (h != f) interp.free_function_code(h);
       interp.free_function_code(f);
     } else {
@@ -11396,8 +11455,8 @@ void Env::clear()
     // anonymous globals (doeval, dodefn) are taken care of elsewhere
     if (!init_code) {
       // get rid of the machine code
-      bool dead = !refp || *refp == 0;
-      if (!dead && *refp == 1) {
+      bool dead = !refp_to_release || *refp_to_release == 0;
+      if (!dead && *refp_to_release == 1) {
 	/* The case of global functions (which have their closures cached in
 	   global variables) is a bit more involved than the above, since refp
 	   will always be at least 1 in this case. To avoid leaking memory on
@@ -11433,6 +11492,14 @@ void Env::clear()
     }
     to_be_deleted.clear();
   }
+  // Release refp reference (will be freed when refcount reaches zero)
+  if (refp_to_release) {
+    interp.release_refp(refp_to_release);
+    refp = nullptr; // Clear pointer to prevent use-after-free
+  }
+  // Mark as cleared so subsequent calls (e.g. from ~Env after FMap::clear()
+  // already called clear() on a still-referenced Env) are no-ops.
+  f = nullptr;
 }
 
 CallInst *Env::CreateCall(Function *f, const vector<Value*>& args)

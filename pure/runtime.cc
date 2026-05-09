@@ -861,15 +861,26 @@ static void pure_free_clos(pure_expr *x)
        << (x->data.clos->local?"local":"global") << " closure "
        << x << " (" << (void*)x << "), refc = " << x->refc << endl;
 #endif
+  // IMPORTANT: Decrement *refp BEFORE potentially deleting the Env.
+  // This way, when delete env -> ~Env -> clear() -> release_refp() runs,
+  // it sees the correct *refp value and can properly free the refp pointer
+  // when both refp_refcounts==0 and *refp==0 (no leak, no double-free).
+  uint32_t *clos_refp = (uint32_t*)x->data.clos->refp;
+  if (clos_refp) {
+    assert(*clos_refp > 0);
+    --(*clos_refp);
+  }
   if (x->data.clos->ep) {
     Env *env = (Env*)x->data.clos->ep;
     assert(env->refc > 0);
     if (--env->refc == 0) delete env;
   }
-  if (x->data.clos->refp) {
-    uint32_t *refp = (uint32_t*)x->data.clos->refp;
-    assert(*refp > 0);
-    --(*refp);
+  // If *refp reached 0 but the Env's release_refp() already ran earlier
+  // (e.g. because FMap::clear() called Env::clear() while closures were
+  // still alive), the refp is orphaned.  Clean it up now.
+  if (clos_refp && *clos_refp == 0) {
+    interpreter& interp = *interpreter::g_interp;
+    interp.try_free_refp(clos_refp);
   }
   if (x->data.clos->env) {
     for (size_t i = 0; i < x->data.clos->m; i++)

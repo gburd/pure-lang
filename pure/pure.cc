@@ -906,7 +906,8 @@ main(int argc, char *argv[])
        state, so make sure that we take the quick way out. There's really no
        need to clean up the interpreter instance if we're exiting anyway. */
     pure_finalize();
-    exit((status>=0)?status:1);
+    fflush(NULL);
+    _exit((status>=0)?status:1);
   }
   interp.symtab.init_builtins();
   /* Only when running interactively, set up handlers for all standard POSIX
@@ -1015,7 +1016,12 @@ _|                       for license information.)\n\
   interp.run("", false, true);
   if (interp.ttymode) cout << endl;
   /* Take the quick way out. There's really no need to clean up the
-     interpreter instance if we're exiting anyway. */
+     interpreter instance if we're exiting anyway.  Use _exit() to skip
+     static destructors -- with shared libraries, the C runtime's exit()
+     can trigger double-destruction of static objects (locals_destroy_cb)
+     due to the interaction between __run_exit_handlers and _dl_fini
+     both calling __cxa_finalize for the same DSO. */
   pure_finalize();
-  exit(0);
+  fflush(NULL);
+  _exit(0);
 }

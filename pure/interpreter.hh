@@ -39,6 +39,7 @@
 
 #include <time.h>
 #include <set>
+#include <unordered_map>
 #include <string>
 #include "expr.hh"
 #include "matcher.hh"
@@ -387,6 +388,9 @@ public:
       builder(*pure_llvm_context),
       parent(0), refc(0), refp(new uint32_t)
   { *refp = 0; add_key(getkey(), refp); }
+  // copy constructor - needed because Env objects are stored by value in maps
+  // Must increment refp refcount since we're sharing the refp pointer
+  Env(const Env& e);
   // assignment -- this is only allowed if the lvalue is an uninitialized
   // environment for which no LLVM function has been created yet, or if it is
   // a global function to be overridden
@@ -995,7 +999,12 @@ public:
   std::unique_ptr<llvm::CGSCCAnalysisManager> CGAM;
   std::unique_ptr<llvm::ModuleAnalysisManager> MAM;
   llvm::orc::ResourceTrackerSP ModuleRT;
-  std::vector<llvm::orc::ResourceTrackerSP> OldModuleRTs;
+  // Track both ResourceTrackers and their associated Env objects
+  struct ModuleResources {
+    llvm::orc::ResourceTrackerSP RT;
+    std::set<Env*> active_envs;
+  };
+  std::vector<ModuleResources> OldModuleResources;
   std::set<std::string> SubmittedSymbols;
   std::set<std::string> FreedSymbols;
   std::set<std::string> AbsoluteSymbols;
@@ -1015,6 +1024,7 @@ public:
   void free_function_code(llvm::Function* f);
   void optimize_function(llvm::Function* f);
   void submit_module();
+  void cleanup_old_modules(size_t keep_recent = 10);
   bool module_dirty;
 
   // LLVM type convenience accessors (require Context)
@@ -1467,11 +1477,16 @@ public:
 
 private:
   map<uint32_t,uint32_t*> keys;
+  // Reference counts for refp pointers themselves (to fix deliberate leak)
+  // Use unordered_map for O(1) average case instead of map's O(log n)
+  std::unordered_map<uint32_t*, uint32_t> refp_refcounts;
 
 public:
   void add_key(uint32_t key, uint32_t *refp)
   {
     keys[key] = refp;
+    // Increment refcount for this refp pointer
+    refp_refcounts[refp]++;
   }
   uint32_t *get_refp(uint32_t key)
   {
@@ -1480,6 +1495,39 @@ public:
       return 0;
     else
       return it->second;
+  }
+  void addref_refp(uint32_t *refp)
+  {
+    if (!refp) return;
+    refp_refcounts[refp]++;
+  }
+  void release_refp(uint32_t *refp)
+  {
+    if (!refp) return;
+    auto it = refp_refcounts.find(refp);
+    if (it != refp_refcounts.end()) {
+      if (--it->second == 0) {
+        refp_refcounts.erase(it);
+        // Only delete refp if no closures reference it either
+        // *refp counts how many closures are using this refp
+        if (*refp == 0) {
+          delete refp;
+        }
+        // If *refp > 0, closures still reference it; they will call
+        // try_free_refp() when they decrement *refp to 0.
+      }
+    }
+  }
+  // Called from pure_free_clos when *refp reaches 0.  If no Env tracks
+  // this refp anymore (refp_refcounts entry already erased), we are the
+  // last user and must free the pointer to prevent a leak.
+  void try_free_refp(uint32_t *refp)
+  {
+    if (!refp) return;
+    if (refp_refcounts.find(refp) == refp_refcounts.end()) {
+      // No Env references this refp anymore -- we're the last user.
+      delete refp;
+    }
   }
 
   // Interface to the lexer.
