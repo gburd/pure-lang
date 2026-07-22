@@ -84,15 +84,15 @@ namespace llvm {
 
 uint8_t interpreter::g_verbose = 0;
 bool interpreter::g_interactive = false;
-interpreter* interpreter::g_interp = 0;
-char *interpreter::baseptr = 0;
+thread_local interpreter* interpreter::g_interp = 0;
+thread_local char *interpreter::baseptr = 0;
 llvm::LLVMContext* pure_llvm_context = nullptr;
 // provide a reasonable default for the stack size (8192K - 128K for
 // interpreter and runtime)
 int interpreter::stackmax = (8192-128)*1024;
 int interpreter::stackdir = 0;
-int interpreter::brkflag = 0;
-int interpreter::brkmask = 0;
+thread_local int interpreter::brkflag = 0;
+thread_local int interpreter::brkmask = 0;
 bool interpreter::g_init = false;
 
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
@@ -133,6 +133,15 @@ void interpreter::debug_init()
 
 void interpreter::init()
 {
+  {
+    // Per-interpreter reentrancy lock, recursive so a Pure->C->Pure
+    // callback into the same interpreter on one thread does not deadlock.
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&lock, &attr);
+    pthread_mutexattr_destroy(&attr);
+  }
   if (!g_interp) g_interp = this;
   if (!g_init) {
     stackdir = c_stack_dir();
@@ -975,6 +984,7 @@ interpreter::~interpreter()
   // JIT, TSCtx, PB, LAM, FAM, CGAM, MAM all managed automatically
   // if this was the global interpreter, reset it now
   if (g_interp == this) g_interp = 0;
+  pthread_mutex_destroy(&lock);
 }
 
 // ORC JIT v2 symbol resolution helpers
@@ -1108,14 +1118,18 @@ void interpreter::cleanup_old_modules(size_t keep_recent) {
 }
 
 void* interpreter::lookup_symbol(const std::string& name) {
+  pure_compile_lock();
   submit_module();
   // Use LLJIT::lookup which handles symbol mangling automatically
   auto Sym = JIT->lookup(name);
   if (!Sym) {
     llvm::consumeError(Sym.takeError());
+    pure_compile_unlock();
     return nullptr;
   }
-  return Sym->toPtr<void*>();
+  void *p = Sym->toPtr<void*>();
+  pure_compile_unlock();
+  return p;
 }
 
 void interpreter::define_symbol(const std::string& name, void* addr) {
@@ -3120,6 +3134,11 @@ pure_expr* interpreter::run(int priv, const string &_s,
   }
   errmsg.clear(); errpos.clear();
   if (check && !interactive) temp = 0;
+  /* Parsing uses a process-global (non-reentrant) flex scanner and
+     mutates the shared symbol table, so it is serialized under the
+     compile lock. Evaluation of already-compiled code does not go through
+     here and runs concurrently. */
+  pure_compile_lock();
   bool ok = lex_begin(fname);
   if (ok) {
     if (temp == 0 && !s.empty()) sources.insert(fname);
@@ -3133,6 +3152,7 @@ pure_expr* interpreter::run(int priv, const string &_s,
     // finalize
     lex_end();
   }
+  pure_compile_unlock();
   // restore global data
   g_verbose = s_verbose;
   g_interactive = s_interactive;
@@ -3215,6 +3235,7 @@ pure_expr *interpreter::runstr(const string& s)
   symtab.search_namespaces = new map< string, set<int32_t> >;
   errmsg.clear(); errpos.clear();
   compiling = false;
+  pure_compile_lock();
   bool ok = lex_begin();
   if (ok) {
     yy::parser parser(*this);
@@ -3224,6 +3245,7 @@ pure_expr *interpreter::runstr(const string& s)
     // finalize
     lex_end();
   }
+  pure_compile_unlock();
   // restore global data
   g_verbose = s_verbose;
   g_interactive = s_interactive;
@@ -3287,6 +3309,7 @@ pure_expr *interpreter::parsestr(const string& s)
   symtab.search_namespaces = new map< string, set<int32_t> >;
   errmsg.clear(); errpos.clear();
   compiling = false;
+  pure_compile_lock();
   bool ok = lex_begin("", true);
   if (ok) {
     yy::parser parser(*this);
@@ -3316,6 +3339,7 @@ pure_expr *interpreter::parsestr(const string& s)
 	it->col2 = lastlen+1;
     }
   }
+  pure_compile_unlock();
   // restore global data
   g_verbose = s_verbose;
   g_interactive = s_interactive;
