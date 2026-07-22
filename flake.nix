@@ -30,11 +30,14 @@
       getLlvmPackages = pkgs:
         pkgs."llvmPackages_${toString llvmVersion}";
 
-      # Build pure for a given pkgs set
-      mkPure = pkgs:
+      # Build pure for a given pkgs set, optionally overriding the LLVM version
+      mkPureWith = pkgs: llvmMajor:
         pkgs.callPackage ./pure.nix {
-          llvmPackages = getLlvmPackages pkgs;
+          llvmPackages = pkgs."llvmPackages_${toString llvmMajor}";
         };
+
+      # Build pure for a given pkgs set using the default LLVM version
+      mkPure = pkgs: mkPureWith pkgs llvmVersion;
 
     in
     (flake-utils.lib.eachSystem nativeSystems (
@@ -49,6 +52,7 @@
         packages = {
           default = mkPure pkgs;
           pure = mkPure pkgs;
+          pure-llvm22 = mkPureWith pkgs 22;
         };
 
         devShells.default = (pkgs.mkShell.override { stdenv = llvmPkgs.stdenv; }) {
