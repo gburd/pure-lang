@@ -7,10 +7,12 @@ DESTDIR=$1
 libdir=`pkg-config pure --variable libdir`
 installdir=${DESTDIR}${libdir}/pure
 
-# Linux might need this
-export LD_LIBRARY_PATH=${installdir}
+# Linux might need this. Include both the module install dir (for the
+# freshly-built .so modules) and the runtime libdir (for libpure.so),
+# so this works when Pure is installed to a non-standard prefix.
+export LD_LIBRARY_PATH=${installdir}:${DESTDIR}${libdir}:${libdir}:${LD_LIBRARY_PATH}
 # OS X needs this
-export DYLD_LIBRARY_PATH=${installdir}
+export DYLD_LIBRARY_PATH=${installdir}:${DESTDIR}${libdir}:${libdir}:${DYLD_LIBRARY_PATH}
 
 curdir=$PWD
 
