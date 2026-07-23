@@ -50,6 +50,10 @@ char *alloca ();
 
 #include "funcall.h"
 
+static_assert(MAXARGS == PURE_ECTX_MAXARGS,
+	      "funcall.h's MAXARGS and pure_ectx::apply_argv's bound "
+	      "(interpreter.hh) must match");
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #ifdef HAVE_SYS_FCNTL_H
@@ -1225,7 +1229,7 @@ pure_expr *pure_symbol(int32_t tag)
   pure_expr*& e = *_e;					\
   interpreter& interp = *interpreter::g_interp;		\
   pure_ectx& ectx = interp.ectx();			\
-  pure_aframe *ex = interp.push_aframe(interp.sstk_sz);	\
+  pure_aframe *ex = interp.push_aframe(ectx.sstk_sz);	\
   pure_expr *old_tmps = ectx.tmps; ectx.tmps = 0;	\
   if (setjmp(ex->jmp)) {				\
     size_t sz = ex->sz;					\
@@ -1239,10 +1243,10 @@ pure_expr *pure_symbol(int32_t tag)
       tmps = next;					\
     }							\
     ectx.tmps = old_tmps;				\
-    for (size_t i = interp.sstk_sz; i-- > sz; )		\
-      if (interp.sstk[i] && interp.sstk[i]->refc > 0)	\
-	pure_free_internal(interp.sstk[i]);		\
-    interp.sstk_sz = sz;				\
+    for (size_t i = ectx.sstk_sz; i-- > sz; )		\
+      if (ectx.sstk[i] && ectx.sstk[i]->refc > 0)	\
+	pure_free_internal(ectx.sstk[i]);		\
+    ectx.sstk_sz = sz;				\
     pure_unref_internal(e);				\
     return 0;						\
   } else {						\
@@ -4044,6 +4048,25 @@ void pure_delete_interp(pure_interp *interp)
   delete _interp;
 }
 
+/* Shadow-stack accessor for JIT-generated code (Phase 1b Slice B, see
+   DESIGN-XTC-RUNTIME.md). Generated code used to read the shadow-stack
+   pointer from a process-global LLVM variable ($$sstk$$) that
+   interpreter::init_llvm_target() bound, via define_symbol, to the
+   address of a single interpreter member. That member is gone --
+   sstk now lives in pure_ectx, looked up per (interpreter, thread) via
+   interpreter::ectx() -- so generated code instead calls this function,
+   which resolves to the calling thread's own shadow stack for whatever
+   interpreter is currently active on this thread (interpreter::g_interp,
+   itself thread-local since Stage 1a). This is one extra indirect call
+   per shadow-stack access site (vref()/envptr() in interpreter.cc); it
+   is what lets one interpreter's compiled code run correctly on several
+   threads at once, which a single shared global could never do. */
+extern "C"
+pure_expr **pure_get_sstk(void)
+{
+  return interpreter::g_interp->ectx().sstk;
+}
+
 extern "C"
 void pure_switch_interp(pure_interp *interp)
 {
@@ -5781,11 +5804,12 @@ static pure_expr *trampoline(interpreter& interp,
 			     pure_expr *x, void *fp, uint32_t n, uint32_t m,
 			     pure_expr **argv)
 {
+  pure_ectx& ectx = interp.ectx();
   pure_expr *ret;
-  pure_aframe *ex = interp.astk;
+  pure_aframe *ex = ectx.astk;
   uint32_t env = 0;
   bool fini = false;
-  if (ex && ex->count && ex->sz == interp.sstk_sz) {
+  if (ex && ex->count && ex->sz == ectx.sstk_sz) {
     // tail call
     if (ex->count++ >= TRAMPOLINE_SIZE) {
       // exceeded the size of the trampoline, so rewind the stack (this is
@@ -5799,7 +5823,7 @@ static pure_expr *trampoline(interpreter& interp,
   }
   // create a new trampoline for handling tail calls
   fini = true;
-  ex = interp.push_aframe(interp.sstk_sz);
+  ex = interp.push_aframe(ectx.sstk_sz);
   ex->count = 1;
   if (setjmp(ex->jmp)) {
     // landing pad of tail call
@@ -5814,9 +5838,9 @@ static pure_expr *trampoline(interpreter& interp,
   } else {
     // construct a stack frame for a function call with parameters
     {
-      size_t sz = interp.sstk_sz;
-      resize_sstk(interp.sstk, interp.sstk_cap, sz, n+m+1);
-      pure_expr **sstk = interp.sstk;
+      size_t sz = ectx.sstk_sz;
+      resize_sstk(ectx.sstk, ectx.sstk_cap, sz, n+m+1);
+      pure_expr **sstk = ectx.sstk;
       if (m>0) env = sz+n+1;
       sstk[sz++] = 0;
       for (size_t j = 0; j < n; j++)
@@ -5826,7 +5850,7 @@ static pure_expr *trampoline(interpreter& interp,
 	assert(x->data.clos->env[j]->refc > 0);
 	x->data.clos->env[j]->refc++;
       }
-      interp.sstk_sz = sz;
+      ectx.sstk_sz = sz;
     }
     // also keep track of the function object on the activation stack so that
     // it can be garbage-collected if we hit an exception
@@ -5886,15 +5910,16 @@ pure_expr *pure_force(pure_expr *x)
     // parameterless anonymous closure (thunk)
     pure_expr *ret;
     interpreter& interp = *interpreter::g_interp;
+    pure_ectx& ectx = interp.ectx();
     void *fp = x->data.clos->fp;
     size_t m = x->data.clos->m;
     uint32_t env = 0;
     assert(fp && x->refc > 0);
     // construct a stack frame for the function call
     if (m>0 || !interp.debugging) {
-      size_t sz = interp.sstk_sz;
-      resize_sstk(interp.sstk, interp.sstk_cap, sz, m+1);
-      pure_expr **sstk = interp.sstk;
+      size_t sz = ectx.sstk_sz;
+      resize_sstk(ectx.sstk, ectx.sstk_cap, sz, m+1);
+      pure_expr **sstk = ectx.sstk;
       env = sz+1;
       sstk[sz++] = 0;
       for (size_t j = 0; j < m; j++) {
@@ -5906,14 +5931,14 @@ pure_expr *pure_force(pure_expr *x)
       cerr << "++ stack: (sz = " << sz << ")\n";
       for (size_t i = 0; i < sz; i++) {
 	pure_expr *x = sstk[i];
-	if (i == interp.sstk_sz) cerr << "** pushed:\n";
+	if (i == ectx.sstk_sz) cerr << "** pushed:\n";
 	if (x)
 	  cerr << i << ": " << (void*)x << ": " << x << '\n';
 	else
 	  cerr << i << ": " << "** frame **\n";
       }
 #endif
-      interp.sstk_sz = sz;
+      ectx.sstk_sz = sz;
     }
 #if DEBUG>1
     cerr << "pure_force: calling " << x << " -> " << fp << endl;
@@ -6058,9 +6083,10 @@ pure_expr *pure_apply(pure_expr *x, pure_expr *y)
   }
   // saturated call; execute it now
   interpreter& interp = *interpreter::g_interp;
+  pure_ectx& ectx = interp.ectx();
   size_t m = f->data.clos->m;
   uint32_t env = 0;
-  static pure_expr *argv[MAXARGS];
+  pure_expr **argv = ectx.apply_argv;
   assert(n <= MAXARGS && "pure_apply: function call exceeds maximum #args");
   assert(fp && (f->data.clos->local || m == 0));
   // collect arguments
@@ -6079,13 +6105,13 @@ pure_expr *pure_apply(pure_expr *x, pure_expr *y)
   if (!interp.checks) { checkall(test); }
   // first push the function object on the shadow stack so that it's
   // garbage-collected in case of an exception
-  resize_sstk(interp.sstk, interp.sstk_cap, interp.sstk_sz, n+m+2);
-  interp.sstk[interp.sstk_sz++] = f0;
+  resize_sstk(ectx.sstk, ectx.sstk_cap, ectx.sstk_sz, n+m+2);
+  ectx.sstk[ectx.sstk_sz++] = f0;
   // construct a stack frame for the function call
   {
-    size_t sz = interp.sstk_sz;
-    resize_sstk(interp.sstk, interp.sstk_cap, sz, n+m+1);
-    pure_expr **sstk = interp.sstk;
+    size_t sz = ectx.sstk_sz;
+    resize_sstk(ectx.sstk, ectx.sstk_cap, sz, n+m+1);
+    pure_expr **sstk = ectx.sstk;
     if (m>0) env = sz+n+1;
     sstk[sz++] = 0;
     for (size_t j = 0; j < n; j++)
@@ -6099,14 +6125,14 @@ pure_expr *pure_apply(pure_expr *x, pure_expr *y)
     cerr << "++ stack: (sz = " << sz << ")\n";
     for (size_t i = 0; i < sz; i++) {
       pure_expr *x = sstk[i];
-      if (i == interp.sstk_sz) cerr << "** pushed:\n";
+      if (i == ectx.sstk_sz) cerr << "** pushed:\n";
       if (x)
 	cerr << i << ": " << (void*)x << ": " << x << '\n';
       else
 	cerr << i << ": " << "** frame **\n";
     }
 #endif
-    interp.sstk_sz = sz;
+    ectx.sstk_sz = sz;
   }
 #if DEBUG>1
   cerr << "pure_apply: calling " << f0 << " -> " << fp << endl;
@@ -6130,7 +6156,7 @@ pure_expr *pure_apply(pure_expr *x, pure_expr *y)
     bool keep = m>0 && ret->refc>0;
     if (keep) ret->refc++;
     // pop the function object from the shadow stack
-    pure_free_internal(interp.sstk[--interp.sstk_sz]);
+    pure_free_internal(ectx.sstk[--ectx.sstk_sz]);
     if (keep) pure_unref_internal(ret);
   }
   return ret;
@@ -6169,12 +6195,13 @@ void pure_throw(pure_expr* e)
 {
   interpreter::brkflag = 0;
   interpreter& interp = *interpreter::g_interp;
+  pure_ectx& ectx = interp.ectx();
   // get rid of indirect call frames
-  while (interp.astk && interp.astk->count) {
-    if (interp.astk->e) pure_free_internal(interp.astk->e);
+  while (ectx.astk && ectx.astk->count) {
+    if (ectx.astk->e) pure_free_internal(ectx.astk->e);
     interp.pop_aframe();
   }
-  if (!interp.astk) {
+  if (!ectx.astk) {
     if (e)
       cerr << "throw: unhandled exception '" << e << "'\n";
     else
@@ -6190,8 +6217,8 @@ For further help and information about Pure please try the 'help' command in\n\
 the interpreter or visit https://agraef.github.io/pure-lang.\n\n";
     abort(); // no exception handler, bail out
   } else {
-    interp.astk->e = e;
-    longjmp(interp.astk->jmp, 1);
+    ectx.astk->e = e;
+    longjmp(ectx.astk->jmp, 1);
   }
 }
 
@@ -6249,13 +6276,13 @@ pure_expr *pure_catch(pure_expr *h, pure_expr *x)
     size_t m = x->data.clos->m;
     assert(fp && (x->data.clos->local || m == 0));
     pure_expr **env = 0;
-    size_t oldsz = interp.sstk_sz, old_di_sz = 0;
+    size_t oldsz = ectx.sstk_sz, old_di_sz = 0;
     if (interp.debugging) old_di_sz = interp.debug_info.size();
     if (m>0 || !interp.debugging) {
       // construct a stack frame
       size_t sz = oldsz;
-      resize_sstk(interp.sstk, interp.sstk_cap, sz, m+1);
-      pure_expr **sstk = interp.sstk; env = sstk+sz+1;
+      resize_sstk(ectx.sstk, ectx.sstk_cap, sz, m+1);
+      pure_expr **sstk = ectx.sstk; env = sstk+sz+1;
       sstk[sz++] = 0;
       for (size_t j = 0; j < m; j++) {
 	sstk[sz++] = x->data.clos->env[j];
@@ -6265,14 +6292,14 @@ pure_expr *pure_catch(pure_expr *h, pure_expr *x)
       cerr << "++ stack: (sz = " << sz << ")\n";
       for (size_t i = 0; i < sz; i++) {
 	pure_expr *x = sstk[i];
-	if (i == interp.sstk_sz) cerr << "** pushed:\n";
+	if (i == ectx.sstk_sz) cerr << "** pushed:\n";
 	if (x)
 	  cerr << i << ": " << (void*)x << ": " << x << '\n';
 	else
 	  cerr << i << ": " << "** frame **\n";
       }
 #endif
-      interp.sstk_sz = sz;
+      ectx.sstk_sz = sz;
     }
     checkstk(test);
     // Push an exception.
@@ -6298,10 +6325,10 @@ pure_expr *pure_catch(pure_expr *h, pure_expr *x)
       }
       // restore the old list of temporaries
       ectx.tmps = old_tmps;
-      for (size_t i = interp.sstk_sz; i-- > sz; )
-	if (interp.sstk[i] && interp.sstk[i]->refc > 0)
-	  pure_free_internal(interp.sstk[i]);
-      interp.sstk_sz = sz;
+      for (size_t i = ectx.sstk_sz; i-- > sz; )
+	if (ectx.sstk[i] && ectx.sstk[i]->refc > 0)
+	  pure_free_internal(ectx.sstk[i]);
+      ectx.sstk_sz = sz;
       if (interp.debugging) {
 	if (!interp.debug_info.empty()) {
 	  DebugInfo& d = interp.debug_info.back();
@@ -6342,7 +6369,7 @@ pure_expr *pure_catch(pure_expr *h, pure_expr *x)
       interp.brkmask = 0;
       if (env)
 	// pass environment
-	res = ((pure_expr*(*)(uint32_t))fp)(env-interp.sstk);
+	res = ((pure_expr*(*)(uint32_t))fp)(env-ectx.sstk);
       else
 	// parameterless call
 	res = ((pure_expr*(*)())fp)();
@@ -6396,17 +6423,17 @@ pure_expr *pure_invoke(void *f, pure_expr** _e)
 #endif
   MEMDEBUG_INIT
   // Push an exception.
-  pure_aframe *ex = interp.push_aframe(interp.sstk_sz);
+  pure_aframe *ex = interp.push_aframe(ectx.sstk_sz);
   // Save old temporaries.
   pure_expr *old_tmps = ectx.tmps; ectx.tmps = 0;
   // Call the function now. Catch exceptions generated by the runtime.
-  size_t oldsz = interp.sstk_sz;
+  size_t oldsz = ectx.sstk_sz;
   if (!interp.debugging) pure_push_args(0, 0);
   if (setjmp(ex->jmp)) {
     // caught an exception
     size_t sz = ex->sz;
     e = ex->e;
-    if (!interp.astk->prev && interp.debugging) {
+    if (!ectx.astk->prev && interp.debugging) {
       if (interp.debug_info.empty())
 	interp.bt.clear();
       else {
@@ -6430,10 +6457,10 @@ pure_expr *pure_invoke(void *f, pure_expr** _e)
     }
     // restore the old list of temporaries
     ectx.tmps = old_tmps;
-    for (size_t i = interp.sstk_sz; i-- > sz; )
-      if (interp.sstk[i] && interp.sstk[i]->refc > 0)
-	pure_free_internal(interp.sstk[i]);
-    interp.sstk_sz = sz;
+    for (size_t i = ectx.sstk_sz; i-- > sz; )
+      if (ectx.sstk[i] && ectx.sstk[i]->refc > 0)
+	pure_free_internal(ectx.sstk[i]);
+    ectx.sstk_sz = sz;
 #if DEBUG>1
     if (e)
       cerr << "pure_invoke: exception " << (void*)e << " (refc = " << e->refc
@@ -6465,10 +6492,10 @@ pure_expr *pure_invoke(void *f, pure_expr** _e)
     // restore the old list of temporaries
     ectx.tmps = old_tmps;
     pure_unref_internal(res);
-    if (interp.sstk_sz > oldsz) {
+    if (ectx.sstk_sz > oldsz) {
       // The called function didn't clean up our stack frame, do it now.
-      assert(interp.sstk_sz == oldsz+1);
-      interp.sstk_sz = oldsz;
+      assert(ectx.sstk_sz == oldsz+1);
+      ectx.sstk_sz = oldsz;
     }
     return res;
   }
@@ -6511,9 +6538,10 @@ uint32_t pure_push_args(uint32_t n, uint32_t m, ...)
 {
   va_list ap;
   interpreter& interp = *interpreter::g_interp;
-  size_t sz = interp.sstk_sz;
-  resize_sstk(interp.sstk, interp.sstk_cap, sz, n+m+1);
-  pure_expr **sstk = interp.sstk; uint32_t env = (m>0)?sz+n+1:0;
+  pure_ectx& ectx = interp.ectx();
+  size_t sz = ectx.sstk_sz;
+  resize_sstk(ectx.sstk, ectx.sstk_cap, sz, n+m+1);
+  pure_expr **sstk = ectx.sstk; uint32_t env = (m>0)?sz+n+1:0;
   // mark the beginning of this frame
   sstk[sz++] = 0;
   pure_expr **frame = sstk+sz;
@@ -6537,14 +6565,14 @@ uint32_t pure_push_args(uint32_t n, uint32_t m, ...)
   cerr << "++ stack: (sz = " << sz << ")\n";
   for (size_t i = 0; i < sz; i++) {
     pure_expr *x = sstk[i];
-    if (i == interp.sstk_sz) cerr << "** pushed:\n";
+    if (i == ectx.sstk_sz) cerr << "** pushed:\n";
     if (x)
       cerr << i << ": " << (void*)x << ": " << x << '\n';
     else
       cerr << i << ": " << "** frame **\n";
   }
 #endif
-  interp.sstk_sz = sz;
+  ectx.sstk_sz = sz;
   // return a pointer to the environment:
   return env;
 }
@@ -6553,9 +6581,10 @@ uint32_t pure_push_args(uint32_t n, uint32_t m, ...)
 static uint32_t pure_push_argv(uint32_t n, uint32_t m, pure_expr **args)
 {
   interpreter& interp = *interpreter::g_interp;
-  size_t sz = interp.sstk_sz;
-  resize_sstk(interp.sstk, interp.sstk_cap, sz, n+m+1);
-  pure_expr **sstk = interp.sstk; uint32_t env = (m>0)?sz+n+1:0;
+  pure_ectx& ectx = interp.ectx();
+  size_t sz = ectx.sstk_sz;
+  resize_sstk(ectx.sstk, ectx.sstk_cap, sz, n+m+1);
+  pure_expr **sstk = ectx.sstk; uint32_t env = (m>0)?sz+n+1:0;
   // mark the beginning of this frame
   sstk[sz++] = 0;
   pure_expr **frame = sstk+sz;
@@ -6577,14 +6606,14 @@ static uint32_t pure_push_argv(uint32_t n, uint32_t m, pure_expr **args)
   cerr << "++ stack: (sz = " << sz << ")\n";
   for (size_t i = 0; i < sz; i++) {
     pure_expr *x = sstk[i];
-    if (i == interp.sstk_sz) cerr << "** pushed:\n";
+    if (i == ectx.sstk_sz) cerr << "** pushed:\n";
     if (x)
       cerr << i << ": " << (void*)x << ": " << x << '\n';
     else
       cerr << i << ": " << "** frame **\n";
   }
 #endif
-  interp.sstk_sz = sz;
+  ectx.sstk_sz = sz;
   // return a pointer to the environment:
   return env;
 }
@@ -6593,8 +6622,9 @@ extern "C"
 void pure_pop_args(pure_expr *x, uint32_t n, uint32_t m)
 {
   interpreter& interp = *interpreter::g_interp;
-  pure_expr **sstk = interp.sstk;
-  size_t sz = interp.sstk_sz;
+  pure_ectx& ectx = interp.ectx();
+  pure_expr **sstk = ectx.sstk;
+  size_t sz = ectx.sstk_sz;
 #if !defined(NDEBUG) || SSTK_DEBUG
   size_t oldsz = sz;
 #endif
@@ -6621,15 +6651,16 @@ void pure_pop_args(pure_expr *x, uint32_t n, uint32_t m)
       pure_free_internal(x);
   };
   if (x) pure_unref_internal(x);
-  interp.sstk_sz = sz;
+  ectx.sstk_sz = sz;
 }
 
 extern "C"
 void pure_pop_tail_args(pure_expr *x, uint32_t n, uint32_t m)
 {
   interpreter& interp = *interpreter::g_interp;
-  pure_expr **sstk = interp.sstk;
-  size_t sz, lastsz = interp.sstk_sz, oldsz = lastsz;
+  pure_ectx& ectx = interp.ectx();
+  pure_expr **sstk = ectx.sstk;
+  size_t sz, lastsz = ectx.sstk_sz, oldsz = lastsz;
   while (lastsz > 0 && sstk[--lastsz]) ;
   assert(lastsz < oldsz && !sstk[lastsz]);
   sz = lastsz-(n+m+1);
@@ -6657,16 +6688,17 @@ void pure_pop_tail_args(pure_expr *x, uint32_t n, uint32_t m)
   };
   if (x) pure_unref_internal(x);
   memmove(sstk+sz, sstk+lastsz, (oldsz-lastsz)*sizeof(pure_expr*));
-  interp.sstk_sz -= n+m+1;
+  ectx.sstk_sz -= n+m+1;
 }
 
 extern "C"
 void pure_push_arg(pure_expr *x)
 {
   interpreter& interp = *interpreter::g_interp;
-  size_t sz = interp.sstk_sz;
-  resize_sstk(interp.sstk, interp.sstk_cap, sz, 2);
-  pure_expr** sstk = interp.sstk;
+  pure_ectx& ectx = interp.ectx();
+  size_t sz = ectx.sstk_sz;
+  resize_sstk(ectx.sstk, ectx.sstk_cap, sz, 2);
+  pure_expr** sstk = ectx.sstk;
   sstk[sz++] = 0; sstk[sz++] = x;
   if (x->refc > 0)
     x->refc++;
@@ -6676,14 +6708,14 @@ void pure_push_arg(pure_expr *x)
   cerr << "++ stack: (sz = " << sz << ")\n";
   for (size_t i = 0; i < sz; i++) {
     pure_expr *x = sstk[i];
-    if (i == interp.sstk_sz) cerr << "** pushed:\n";
+    if (i == ectx.sstk_sz) cerr << "** pushed:\n";
     if (x)
       cerr << i << ": " << (void*)x << ": " << x << '\n';
     else
       cerr << i << ": " << "** frame **\n";
   }
 #endif
-  interp.sstk_sz = sz;
+  ectx.sstk_sz = sz;
 }
 
 extern "C"
@@ -6693,14 +6725,15 @@ void pure_pop_arg(pure_expr *y)
   pure_pop_args(y, 1, 0);
 #else
   interpreter& interp = *interpreter::g_interp;
-  pure_expr *x = interp.sstk[interp.sstk_sz-1];
+  pure_ectx& ectx = interp.ectx();
+  pure_expr *x = ectx.sstk[ectx.sstk_sz-1];
   if (y) y->refc++;
   if (x->refc > 1)
     x->refc--;
   else
     pure_free_internal(x);
   if (y) pure_unref_internal(y);
-  interp.sstk_sz -= 2;
+  ectx.sstk_sz -= 2;
 #endif
 }
 
@@ -6711,10 +6744,11 @@ void pure_pop_tail_arg(pure_expr *y)
   pure_pop_tail_args(y, 1, 0);
 #else
   interpreter& interp = *interpreter::g_interp;
-  pure_expr **sstk = interp.sstk;
-  size_t lastsz = interp.sstk_sz, oldsz = lastsz;
+  pure_ectx& ectx = interp.ectx();
+  pure_expr **sstk = ectx.sstk;
+  size_t lastsz = ectx.sstk_sz, oldsz = lastsz;
   while (lastsz > 0 && sstk[--lastsz]) ;
-  pure_expr *x = interp.sstk[lastsz-1];
+  pure_expr *x = ectx.sstk[lastsz-1];
   if (y) y->refc++;
   if (x->refc > 1)
     x->refc--;
@@ -6722,7 +6756,7 @@ void pure_pop_tail_arg(pure_expr *y)
     pure_free_internal(x);
   if (y) pure_unref_internal(y);
   memmove(sstk+lastsz-2, sstk+lastsz, (oldsz-lastsz)*sizeof(pure_expr*));
-  interp.sstk_sz -= 2;
+  ectx.sstk_sz -= 2;
 #endif
 }
 
@@ -6857,10 +6891,11 @@ static string printx(pure_expr *x, size_t n)
 
 static void get_vars(interpreter& interp, list<DebugInfo>::reverse_iterator kt)
 {
+  pure_ectx& ectx = interp.ectx();
   // find the arguments and environment of this call and all subsequent calls
   // on the shadow stack
-  pure_expr **sstk = interp.sstk;
-  size_t sz = interp.sstk_sz;
+  pure_expr **sstk = ectx.sstk;
+  size_t sz = ectx.sstk_sz;
   list<DebugInfo>::reverse_iterator it = interp.debug_info.rbegin(),
     end = interp.debug_info.rend();
   do {
@@ -7098,11 +7133,12 @@ static const bool yes_or_no(const string& msg)
 static void pure_debug_backtrace(ostream& out)
 {
   interpreter& interp = *interpreter::g_interp;
+  pure_ectx& ectx = interp.ectx();
   list<DebugInfo>::iterator it = interp.debug_info.begin(),
     end = interp.debug_info.end();
   if (it == end) return;
-  size_t save_sz = interp.sstk_sz;
-  interp.sstk_sz = interp.debug_info.back().sz;
+  size_t save_sz = ectx.sstk_sz;
+  ectx.sstk_sz = interp.debug_info.back().sz;
   get_vars(interp, interp.debug_info.rend());
   for (; it != end; ++it) {
     DebugInfo& d = *it;
@@ -7120,7 +7156,7 @@ static void pure_debug_backtrace(ostream& out)
     }
     print_vars(out, interp, d);
   }
-  interp.sstk_sz = save_sz;
+  ectx.sstk_sz = save_sz;
 }
 
 extern "C"
@@ -7133,7 +7169,7 @@ void pure_debug_rule(void *_e, void *_r)
   if (!r) {
     // push a new activation record
     interp.debug_info.push_back(DebugInfo(interp.debug_info.size()+1,
-					  interp.sstk_sz, e));
+					  interp.ectx().sstk_sz, e));
     if (e->tag <= 0 ||
 	interp.externals.find(e->tag) == interp.externals.end())
       return;
@@ -9292,7 +9328,12 @@ pure_expr *del_constdef(pure_expr *x)
 
 static char *swap_endian(char* s, const int nbytes)
 {
-  static char t[16];
+  // Thread-local: this is a pure byte-swap scratchpad with no
+  // persistence across calls (every caller dereferences the result
+  // immediately), so it doesn't belong in pure_ectx -- but it was
+  // `static`, meaning two threads swapping endianness concurrently
+  // raced on it.
+  static thread_local char t[16];
   switch (nbytes) {
   case 2:
     t[0]=*(s+1);
@@ -13118,7 +13159,11 @@ int64_t pure_mktime(struct tm *tm)
 extern "C"
 char *pure_strftime(const char *format, struct tm *tm)
 {
-  static char buf[1024];
+  // Thread-local: the Pure extern declaration for this returns a copied
+  // string (see lib/system.pure), so nothing retains this buffer past
+  // the call -- but it was `static`, racing two threads formatting
+  // times concurrently.
+  static thread_local char buf[1024];
   if (!strftime(buf, 1024, format, tm))
     /* The interface to strftime is rather brain-damaged since it returns zero
        both in case of a buffer overflow and when the resulting string is
