@@ -88,6 +88,11 @@ jobs:
         run: |
           make check
 
+      - name: Run embedding test
+        working-directory: pure
+        run: |
+          make check-embed
+
       - name: Load libpure with dlopen
         working-directory: pure
         run: |
@@ -164,6 +169,11 @@ jobs:
         working-directory: pure
         run: |
           make check
+
+      - name: Run embedding test
+        working-directory: pure
+        run: |
+          make check-embed
 
       - name: Load libpure with dlopen
         working-directory: pure
