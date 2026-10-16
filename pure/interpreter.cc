@@ -97,8 +97,6 @@ static std::string libpure_self_path()
 
 #include "gsl_structs.h"
 
-uint8_t interpreter::g_verbose = 0;
-bool interpreter::g_interactive = false;
 llvm::LLVMContext& pure_active_llvm_context()
 {
   assert(interpreter::g_interp && interpreter::g_interp->Context);
