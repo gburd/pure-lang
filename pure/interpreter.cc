@@ -115,11 +115,9 @@ std::atomic<uint64_t> interpreter::next_id{1};
 // runtime on a `fib 30` run: an unordered_map lookup on every hot-path
 // call, plus a real shared-library call boundary at every runtime.cc/
 // printer.cc call site).
-thread_local std::unordered_map<uint64_t, pure_ectx> interpreter::ectx_cache;
-
 __attribute__((noinline)) pure_ectx& interpreter::ectx_slow()
 {
-  pure_ectx& e = ectx_cache[id];
+  pure_ectx& e = ectx_cache.get()[id];
   last_ectx_id = id;
   last_ectx_ptr = &e;
   return e;

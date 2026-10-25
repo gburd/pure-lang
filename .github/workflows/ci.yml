@@ -88,6 +88,11 @@ jobs:
         run: |
           make check
 
+      - name: Load libpure with dlopen
+        working-directory: pure
+        run: |
+          make check-dlopen
+
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
@@ -159,6 +164,11 @@ jobs:
         working-directory: pure
         run: |
           make check
+
+      - name: Load libpure with dlopen
+        working-directory: pure
+        run: |
+          make check-dlopen
 
       - name: Upload test results
         if: failure()

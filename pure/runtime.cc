@@ -54,6 +54,25 @@ static_assert(MAXARGS == PURE_ECTX_MAXARGS,
 	      "funcall.h's MAXARGS and pure_ectx::apply_argv's bound "
 	      "(interpreter.hh) must match");
 
+/* This file's per-thread scratch state, kept off the TLS segment (see
+   PURE_TLS_HOT in util.hh). Each member is described where it is used. */
+struct FaustMeta;
+struct stack_elem_t {
+  int i, n;
+  pure_expr **xv;
+};
+struct runtime_tls {
+  std::vector<interpreter*> locked_interp_stack;
+  pure_expr *cmp_p = nullptr;
+  unsigned cmp_pno = 0;
+  char swap_buf[16];
+  char strftime_buf[1024];
+  FaustMeta *faust_metadata = nullptr;
+  stack_elem_t *elem_stack = nullptr;
+  int astacksz = 0, stacksz = 0;
+};
+static PURE_TLS_HOT thread_local per_thread<runtime_tls> rt_tls;
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #ifdef HAVE_SYS_FCNTL_H
@@ -4172,9 +4191,7 @@ extern "C" void pure_compile_unlock()
 // pure_lock_interp's own contract is to return the *previous* active
 // interpreter, which is commonly NULL on a fresh thread, that silently
 // skipped the unlock entirely.)
-namespace {
-  thread_local std::vector<interpreter*> locked_interp_stack;
-}
+#define locked_interp_stack (rt_tls->locked_interp_stack)
 
 extern "C"
 pure_interp *pure_lock_interp(pure_interp *interp)
@@ -7756,8 +7773,8 @@ pure_expr *pure_double_colvect(double from, double to, double step)
    (now possible without the GIL) must not clobber each other's context.
    The save/restore nesting in the callers still handles reentrancy within
    one thread. */
-static thread_local pure_expr* cmp_p;
-static thread_local unsigned cmp_pno;
+#define cmp_p (rt_tls->cmp_p)
+#define cmp_pno (rt_tls->cmp_pno)
 
 static inline int sgn(int x)
 {
@@ -9364,7 +9381,7 @@ static char *swap_endian(char* s, const int nbytes)
   // immediately), so it doesn't belong in pure_ectx -- but it was
   // `static`, meaning two threads swapping endianness concurrently
   // raced on it.
-  static thread_local char t[16];
+  char *t = rt_tls->swap_buf;
   switch (nbytes) {
   case 2:
     t[0]=*(s+1);
@@ -13194,12 +13211,8 @@ char *pure_strftime(const char *format, struct tm *tm)
   // string (see lib/system.pure), so nothing retains this buffer past
   // the call -- but it was `static`, racing two threads formatting
   // times concurrently.
-  // The buffer lives on the heap rather than as a thread_local array:
-  // libpure's TLS segment has to fit in the static TLS reserve glibc keeps
-  // for dlopen'ed libraries (see PURE_TLS_HOT in interpreter.hh), and a
-  // 1 KB array would make up most of it.
-  static thread_local char *buf = nullptr;
-  if (!buf && !(buf = (char*)malloc(1024))) return (char*)"";
+  // Kept off the TLS segment (see PURE_TLS_HOT in util.hh).
+  char *buf = rt_tls->strftime_buf;
   if (!strftime(buf, 1024, format, tm))
     /* The interface to strftime is rather brain-damaged since it returns zero
        both in case of a buffer overflow and when the resulting string is
@@ -17561,7 +17574,7 @@ struct MetaGlue {
 // not to break compatibility with older Faust2 versions. Eventually, the
 // global data should be replaced with the first member of the glue data
 // structure.
-static thread_local FaustMeta *__faust_metadata;
+#define __faust_metadata (rt_tls->faust_metadata)
 #if FAUST_NEW_META
 static void declareMetaGlue(void *data, const char* key, const char* value)
 #else
@@ -17834,12 +17847,9 @@ void faust_free_ui(void *p)
 /* Scratch state for the Faust UI-description walker (faust_make_info),
    used within a single call. Thread-local so concurrent Faust processing
    on different threads does not corrupt a shared stack. */
-static thread_local struct stack_elem_t {
-  int i, n;
-  pure_expr **xv;
-} *elem_stack = NULL;
-
-static thread_local int astacksz = 0, stacksz = 0; // scratch, see elem_stack
+#define elem_stack (rt_tls->elem_stack)
+#define astacksz (rt_tls->astacksz)
+#define stacksz (rt_tls->stacksz)
 
 static void clear()
 {

@@ -287,6 +287,15 @@ AC_CHECK_FUNCS(history_set_history_state)
 LIBS="$save_LIBS"
 dnl How to get the pthread library.
 AX_PTHREAD
+dnl Where dlopen lives (libc, or -ldl before glibc 2.34); for make check-dlopen.
+save_LIBS="$LIBS"
+AC_SEARCH_LIBS(dlopen, dl)
+LIBS="$save_LIBS"
+DL_LIBS=""
+case "$ac_cv_search_dlopen" in
+  -l*) DL_LIBS="$ac_cv_search_dlopen" ;;
+esac
+AC_SUBST(DL_LIBS)
 dnl iconv and nl_langinfo need special treatment (macros by Bruno Haible).
 AM_ICONV
 if test "$am_cv_func_iconv" != yes; then

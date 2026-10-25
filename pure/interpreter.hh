@@ -156,14 +156,7 @@ using namespace std;
 
 class interpreter;
 
-/* TLS model for the runtime's hot per-thread state (see the comment on
-   interpreter::g_interp). Platforms without ELF initial-exec TLS fall back
-   to the compiler's default model. */
-#if defined(__ELF__) && (defined(__GNUC__) || defined(__clang__))
-#define PURE_TLS_HOT __attribute__((tls_model("initial-exec")))
-#else
-#define PURE_TLS_HOT
-#endif
+#include "util.hh"
 
 // Global LLVM context pointer set by interpreter, used by Env constructors
 // before the interpreter class definition is complete.
@@ -799,7 +792,7 @@ public:
   inline void purge_ectx()
   {
     if (id == last_ectx_id) { last_ectx_id = 0; last_ectx_ptr = 0; }
-    ectx_cache.erase(id);
+    ectx_cache->erase(id);
   }
   map<uint32_t,void*> locals; // interpreter-local storage for applications
 
@@ -1541,8 +1534,8 @@ public:
   //     turns each access into one %fs-relative load. It requires the
   //     library's TLS to be allocated in the static TLS block, which
   //     holds when libpure is linked at startup or dlopen'ed into a
-  //     process with enough static TLS surplus (glibc reserves space for
-  //     this; libpure's whole TLS segment is under 1.5 KB).
+  //     process with enough static TLS surplus (see PURE_TLS_HOT in
+  //     util.hh for how small that surplus can be).
   PURE_TLS_HOT static inline thread_local interpreter* g_interp = nullptr;
   // not saved
   PURE_TLS_HOT static inline thread_local int brkflag = 0;
@@ -1581,11 +1574,12 @@ private:
   // per thread -- mutated only by its own thread, so no lock is needed --
   // plus a single-slot fast path in front of it. last_ectx_id==0 means
   // the slot is empty (0 is never a valid `id`: new_id() starts at 1).
-  // ectx_cache has a non-trivial constructor, so it keeps an out-of-line
-  // definition; it is only touched on the slow path (an interpreter switch
-  // on this thread). The single-slot cache in front of it is on every hot
-  // path and is defined like g_interp above.
-  static thread_local std::unordered_map<uint64_t, pure_ectx> ectx_cache;
+  // ectx_cache is only touched on the slow path (an interpreter switch on
+  // this thread), so it lives on the heap (see per_thread in util.hh). The
+  // single-slot cache in front of it is on every hot path and is defined
+  // like g_interp above.
+  PURE_TLS_HOT static inline thread_local
+    per_thread<std::unordered_map<uint64_t, pure_ectx>> ectx_cache;
   PURE_TLS_HOT static inline thread_local uint64_t last_ectx_id = 0;
   PURE_TLS_HOT static inline thread_local pure_ectx *last_ectx_ptr = nullptr;
 

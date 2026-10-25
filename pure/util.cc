@@ -222,15 +222,25 @@ static char *my_nl_langinfo(nl_item item)
 // Each thread gets its own small cache; the round-robin reuse
 // optimization this file describes still works exactly as before,
 // just scoped per-thread instead of process-wide.
-static thread_local char *lastalloc[NCACHE], *lastfree[NCACHE];
-static thread_local size_t lastlen[NCACHE];
-static thread_local int lasti = 0;
+// The cache is kept off the TLS segment (see PURE_TLS_HOT in util.hh).
+// Freed strings it still holds are released when the thread exits.
+struct strcache {
+  char *lastalloc[NCACHE] = {}, *lastfree[NCACHE] = {};
+  size_t lastlen[NCACHE] = {};
+  int lasti = 0;
+  ~strcache() { for (int i = 0; i < NCACHE; i++) free(lastfree[i]); }
+};
+static PURE_TLS_HOT thread_local per_thread<strcache> strcache_tls;
 
 //#define DEBUG_CACHE
 
 char *my_strdup(const char *s)
 {
   if (!s) return 0;
+  strcache& c = strcache_tls.get();
+  char **lastalloc = c.lastalloc, **lastfree = c.lastfree;
+  size_t *lastlen = c.lastlen;
+  int& lasti = c.lasti;
   size_t l = strlen(s);
   for (int i = 0; i < NCACHE; i++)
     if (lastfree[i] && lastlen[i] >= l) {
@@ -261,6 +271,8 @@ char *my_strdup(const char *s)
 void my_strfree(char *s)
 {
   if (!s) return;
+  strcache& c = strcache_tls.get();
+  char **lastalloc = c.lastalloc, **lastfree = c.lastfree;
   for (int i = 0; i < NCACHE; i++)
     if (s == lastalloc[i]) {
 #ifdef DEBUG_CACHE
@@ -868,17 +880,22 @@ ictowcs(wchar_t *t, char *s)
   // was undefined behavior the moment two threads converted UTF-8 to
   // wchar_t concurrently, independent of any Pure-level memory-safety
   // concern.
-  static thread_local iconv_t myic[2] = { (iconv_t)-1, (iconv_t)-1 };
-  if (myic[1] == (iconv_t)-1)
-    myic[1] = iconv_open("WCHAR_T", "UTF-8");
-  if (myic[1] == (iconv_t)-1)
+  struct ic_t {
+    iconv_t ic = (iconv_t)-1;
+    ~ic_t() { if (ic != (iconv_t)-1) iconv_close(ic); }
+  };
+  static PURE_TLS_HOT thread_local per_thread<ic_t> myic_tls;
+  iconv_t& myic = myic_tls->ic;
+  if (myic == (iconv_t)-1)
+    myic = iconv_open("WCHAR_T", "UTF-8");
+  if (myic == (iconv_t)-1)
     return NULL;
   else {
     size_t l = strlen(s);
     char *inbuf = s; wchar_t *outbuf = t;
     size_t inbytes = l, outbytes = l*sizeof(wchar_t);
 
-    if (myiconv(myic[1], &inbuf, &inbytes, (char**)&outbuf, &outbytes) ==
+    if (myiconv(myic, &inbuf, &inbytes, (char**)&outbuf, &outbytes) ==
 	(size_t)-1)
       return NULL;
     /* terminate the output string */
