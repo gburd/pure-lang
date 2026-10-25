@@ -861,26 +861,22 @@ static void pure_free_clos(pure_expr *x)
        << (x->data.clos->local?"local":"global") << " closure "
        << x << " (" << (void*)x << "), refc = " << x->refc << endl;
 #endif
-  // IMPORTANT: Decrement *refp BEFORE potentially deleting the Env.
-  // This way, when delete env -> ~Env -> clear() -> release_refp() runs,
-  // it sees the correct *refp value and can properly free the refp pointer
-  // when both refp_refcounts==0 and *refp==0 (no leak, no double-free).
+  // Drop this closure's count on *refp before deleting the Env, and decide
+  // here who frees refp. If no Env references it any more (its
+  // release_refp() already ran, e.g. because FMap::clear() cleared it while
+  // closures were still alive), the refp is orphaned and we free it now.
+  // Otherwise the Env's release_refp() frees it, possibly during the delete
+  // below, so refp must not be touched after that.
   uint32_t *clos_refp = (uint32_t*)x->data.clos->refp;
   if (clos_refp) {
     assert(*clos_refp > 0);
-    --(*clos_refp);
+    if (--(*clos_refp) == 0)
+      interpreter::g_interp->try_free_refp(clos_refp);
   }
   if (x->data.clos->ep) {
     Env *env = (Env*)x->data.clos->ep;
     assert(env->refc > 0);
     if (--env->refc == 0) delete env;
-  }
-  // If *refp reached 0 but the Env's release_refp() already ran earlier
-  // (e.g. because FMap::clear() called Env::clear() while closures were
-  // still alive), the refp is orphaned.  Clean it up now.
-  if (clos_refp && *clos_refp == 0) {
-    interpreter& interp = *interpreter::g_interp;
-    interp.try_free_refp(clos_refp);
   }
   if (x->data.clos->env) {
     for (size_t i = 0; i < x->data.clos->m; i++)
@@ -8358,7 +8354,8 @@ pure_expr *string_concat(const char* s, const char *t)
 {
   assert(s && t);
   size_t p = strlen(s), q = strlen(t);
-  char *buf = new char[p+q+1];
+  char *buf = (char*)malloc(p+q+1);
+  if (!buf) return 0;
   strcpy(buf, s); strcpy(buf+p, t);
   pure_expr *x = new_expr();
   x->tag = EXPR::STR;
@@ -8385,7 +8382,9 @@ pure_expr *string_concat_list(pure_expr *xs)
   }
   if (!is_nil(ys)) return 0;
   // allocate the result string
-  char *buf = new char[n+1]; buf[0] = 0;
+  char *buf = (char*)malloc(n+1);
+  if (!buf) return 0;
+  buf[0] = 0;
   // concatenate
   ys = xs; n = 0;
   while (is_cons(ys, z, zs) && z->tag == EXPR::STR) {
@@ -8419,7 +8418,9 @@ pure_expr *string_join(const char *delim, pure_expr *xs)
   }
   if (!is_nil(ys)) return 0;
   // allocate the result string
-  char *buf = new char[n+1]; buf[0] = 0;
+  char *buf = (char*)malloc(n+1);
+  if (!buf) return 0;
+  buf[0] = 0;
   // concatenate
   ys = xs; n = k = 0;
   while (is_cons(ys, z, zs) && z->tag == EXPR::STR) {
@@ -8480,7 +8481,8 @@ pure_expr *string_substr(const char* s, uint32_t pos, uint32_t size)
   assert(s);
   const char *p = u8strcharpos(s, pos), *q = u8strcharpos(p, size);
   size_t n = q-p;
-  char *buf = new char[n+1];
+  char *buf = (char*)malloc(n+1);
+  if (!buf) return 0;
   strncpy(buf, p, n); buf[n] = 0;
   pure_expr *x = new_expr();
   x->tag = EXPR::STR;
