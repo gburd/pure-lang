@@ -120,26 +120,30 @@ map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
 // Create ArrayRef<Value*> from iterator pair (used throughout for GEP indices)
 #define mkidxs(begin, end) llvm::ArrayRef<llvm::Value*>(begin, end)
 
-/* Check the C stack direction (pilfered from the Chicken sources). A value >0
-   indicates that the stack grows upward, towards higher addresses, <0 that
-   the stack grows downward, towards lower addresses, and =0 that the
-   direction is not known (this shouldn't happen, though).  */
+/* Check the C stack direction. A value >0 indicates that the stack grows
+   upward, towards higher addresses, <0 that the stack grows downward,
+   towards lower addresses, and =0 that the direction is not known (this
+   shouldn't happen, though).
 
-static int c_stack_dir_tester(int counter, char *baseptr)
+   The tester must run in a frame of its own, below (or above) the
+   caller's. The old version recursed 100 times through a tail call, which
+   current compilers turn into a loop and inline, leaving both variables in
+   one frame in no particular order; with clang 22 on FreeBSD it then
+   reported an upward stack, which disabled the C stack overflow check. */
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+static int c_stack_dir_tester(volatile char *callerptr)
 {
-  if (counter < 100) {
-    return c_stack_dir_tester(counter + 1, baseptr);
-  } else {
-    char tester;
-    return &tester - baseptr;
-  }
+  volatile char tester = 0;
+  return (&tester > callerptr) ? 1 : (&tester < callerptr) ? -1 : 0;
 }
 
 static int c_stack_dir()
 {
-  char basechar;
-  int dir = c_stack_dir_tester(0, &basechar);
-  return (dir>0)?1:(dir<0)?-1:0;
+  volatile char basechar = 0;
+  return c_stack_dir_tester(&basechar);
 }
 
 void interpreter::debug_init()
