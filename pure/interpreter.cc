@@ -79,6 +79,22 @@ namespace llvm {
 #define PURE_PIC ""
 #endif
 
+#if defined(LIBPURE) && !defined(_WIN32)
+#include <dlfcn.h>
+/* The file this copy of libpure was loaded from, so that the JIT resolves
+   runtime symbols in this very copy. Searching for libpure by name instead
+   can load a second copy from another directory (an installed one, say),
+   whose functions would then operate on separate global and thread-local
+   state. Empty if it cannot be determined. */
+static std::string libpure_self_path()
+{
+  Dl_info info;
+  if (dladdr((void*)&libpure_self_path, &info) && info.dli_fname)
+    return info.dli_fname;
+  return "";
+}
+#endif
+
 
 #include "gsl_structs.h"
 
@@ -143,26 +159,19 @@ void interpreter::init()
     // Preload some auxiliary dlls. First load the Pure library if we built it.
 #ifdef LIBPURE
     {
-      // Probe the in-tree build location first, then the installed location,
-      // then fall back to the bare soname (resolved via LD_LIBRARY_PATH /
-      // ldconfig). Only warn if none of these can be loaded.
-      std::string libPaths[] = {
-        std::string("../lib/") + LIBPURE,        // In-tree builds (run from pure/)
-#ifdef LIBDIR
-        std::string(LIBDIR) + "/" + LIBPURE,     // Installed location
+      // Make libpure's symbols visible to the JIT. Load the copy that is
+      // already running (see libpure_self_path); the bare soname, which the
+      // dynamic loader matches against loaded objects, is the fallback.
+#ifndef _WIN32
+      std::string self = libpure_self_path();
+#else
+      std::string self;
 #endif
-        LIBPURE,                                 // Bare soname
-      };
       std::string libErr;
-      bool loaded = false;
-      for (const auto& libPath : libPaths) {
-        if (!llvm::sys::DynamicLibrary::LoadLibraryPermanently(libPath.c_str(),
-                                                               &libErr)) {
-          loaded = true;
-          break;
-        }
-      }
-      if (!loaded)
+      if ((self.empty() ||
+	   llvm::sys::DynamicLibrary::LoadLibraryPermanently(self.c_str(),
+							     &libErr)) &&
+	  llvm::sys::DynamicLibrary::LoadLibraryPermanently(LIBPURE, &libErr))
         std::cerr << "warning: failed to load " << LIBPURE << ": "
                   << libErr << '\n';
     }
@@ -317,24 +326,21 @@ void interpreter::init()
   // (pure_intval, pure_dblval, typep, etc.) can be resolved by the JIT.
   // GetForCurrentProcess() only searches RTLD_DEFAULT (global symbol table),
   // which doesn't include libpure unless it was linked with -rdynamic.
+  // Use the copy of libpure that is running (see libpure_self_path).
   {
-    std::string libname = std::string("libpure") + DLLEXT;
-    std::string libpure_paths[] = {
-      "../lib/" + libname,                    // In-tree builds (run from pure/)
-      std::string(LIBDIR) + "/" + libname,    // Installed location
-    };
-
     bool libpure_loaded = false;
-    for (const auto& path : libpure_paths) {
+#if defined(LIBPURE) && !defined(_WIN32)
+    std::string self = libpure_self_path();
+    if (!self.empty()) {
       auto LibPureGen = DynamicLibrarySearchGenerator::Load(
-        path.c_str(), DL->getGlobalPrefix());
+        self.c_str(), DL->getGlobalPrefix());
       if (LibPureGen) {
         MainJD.addGenerator(std::move(*LibPureGen));
         libpure_loaded = true;
-        break;
-      }
-      consumeError(LibPureGen.takeError());
+      } else
+        consumeError(LibPureGen.takeError());
     }
+#endif
 
     if (!libpure_loaded) {
       // Fallback: load entire process symbol table via sys::DynamicLibrary.
