@@ -4137,7 +4137,11 @@ pure_interp *pure_create_interp(int argc, char *argv[])
 	return 0;
       }
       interp.compile();
-    }
+    } else
+      // Without the prelude even 1+1 stays unevaluated, which an embedding
+      // host would otherwise only notice from its results.
+      interp.warning("pure_create_interp: warning: prelude not found at " +
+		     prelude + "; set PURELIB or pass --noprelude");
   }
   // load scripts specified on the command line
   if (argv) {

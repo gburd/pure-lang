@@ -646,7 +646,8 @@ typedef struct _pure_interp pure_interp;
 
    pure_create_interp returns NULL if the interpreter cannot be created,
    for example when the LLVM/ORC JIT cannot be initialized for the host;
-   check the result.
+   check the result. If the prelude cannot be found (see PURELIB), it
+   prints a warning and creates the interpreter without it.
 
    Embedding. libpure can run inside a host application that owns the
    process (a database extension, an audio plugin, a spreadsheet). On the
@@ -657,7 +658,8 @@ typedef struct _pure_interp pure_interp;
      result. Exceptions that no Pure code catches are returned to the host
      instead of aborting: the x-variants (pure_evalx, pure_appx,
      pure_funcallx, pure_symbolx, ...) hand the exception value back
-     directly; pure_eval sets lasterr(); and pure_app, pure_appl,
+     directly, unreferenced (pure_freenew it when done, or pure_new it to
+     keep it); pure_eval sets lasterr(); and pure_app, pure_appl,
      pure_appv, pure_symbol, pure_force and pure_funcall return NULL and
      leave the exception for pure_last_exception() when called from the
      host with no Pure handler active (from Pure code, or from C code

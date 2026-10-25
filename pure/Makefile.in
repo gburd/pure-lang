@@ -600,9 +600,18 @@ check: pure
 	./run-tests $(rtflags)
 
 # Embedding contract test: libpure called from a C host (see test/embed.c).
+# It runs in test/embed.d/run, next to a decoy copy of libpure in
+# test/embed.d/lib, to check that libpure does not load a second copy of
+# itself by name.
 check-embed: test/embed$(EXE)
-	LD_LIBRARY_PATH=.:$$LD_LIBRARY_PATH DYLD_LIBRARY_PATH=.:$$DYLD_LIBRARY_PATH \
-	PURELIB=$(srcdir)/lib ./test/embed$(EXE)
+	mkdir -p test/embed.d/lib test/embed.d/run
+	cp $(libpure) test/embed.d/lib/$(libpure_soname)
+	cd test/embed.d/run && \
+	LD_LIBRARY_PATH=$(abspath .):$$LD_LIBRARY_PATH \
+	DYLD_LIBRARY_PATH=$(abspath .):$$DYLD_LIBRARY_PATH \
+	PURELIB=$(abspath $(srcdir)/lib) ../../embed$(EXE)
+	rm -f test/embed.d/lib/$(libpure_soname)
+	rmdir test/embed.d/lib test/embed.d/run test/embed.d
 
 test/embed$(EXE): test/embed.c runtime.h $(libpure)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(PTHREAD_CFLAGS) -I$(srcdir) -o $@ \

@@ -14,6 +14,7 @@
 
    Built and run by 'make check-embed'. Exits 0 on success. */
 
+#define _GNU_SOURCE /* dl_iterate_phdr on glibc */
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +58,31 @@ static long heap_in_use(void)
 #endif
 }
 
+/* Count the loaded objects named libpure*. The JIT must resolve runtime
+   calls in the copy the host loaded, not a second copy found by name
+   elsewhere (make check-embed runs this next to a decoy copy in ../lib). */
+#if defined(__ELF__)
+#include <link.h>
+static int count_cb(struct dl_phdr_info *info, size_t size, void *data)
+{
+  const char *base;
+  (void) size;
+  if (!info->dlpi_name) return 0;
+  base = strrchr(info->dlpi_name, '/');
+  base = base ? base + 1 : info->dlpi_name;
+  if (strncmp(base, "libpure", 7) == 0) ++*(int *) data;
+  return 0;
+}
+static int libpure_copies(void)
+{
+  int n = 0;
+  dl_iterate_phdr(count_cb, &n);
+  return n;
+}
+#else
+static int libpure_copies(void) { return 1; }
+#endif
+
 static volatile int cancel_requested = 0;
 
 static int interrupt_hook(void)
@@ -82,6 +108,8 @@ static void test_exceptions(pure_expr *h)
 
   r = pure_appx(h, pure_int(9), &e);
   check(r == 0 && is_app_int(e, "oops", 9), "pure_appx hands it back");
+  check(e && e->refc == 0, "  unreferenced, for the caller to pure_freenew");
+  if (e) pure_freenew(e);
 
   r = pure_symbol(pure_sym("thrower"));
   check(r == 0 && is_app_int(pure_last_exception(), "oops", 0),
@@ -213,6 +241,7 @@ int main(void)
   pure_expr *h, *f;
   check(ip != NULL, "pure_create_interp");
   if (!ip) return 1;
+  check(libpure_copies() == 1, "one copy of libpure is loaded");
   pure_switch_interp(ip);
   pure_eval("h x = throw (oops x); thrower = throw (oops 0); "
 	    "loop n = loop (n+1); "

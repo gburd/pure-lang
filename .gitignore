@@ -39,6 +39,7 @@ pure/etc/pure-mode.el
 pure/etc/*.elc
 pure/test/*.diff
 pure/test/embed
+pure/test/embed.d
 pure/test/dlopen
 purepad/Debug
 purepad/Release
