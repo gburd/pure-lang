@@ -92,6 +92,28 @@ static std::string libpure_self_path()
     return info.dli_fname;
   return "";
 }
+#elif defined(_WIN32)
+#include <windows.h>
+#include <llvm/Support/ConvertUTF.h>
+/* The same with the Win32 API: the file of the module that contains the
+   given address, by default this function's (libpure.dll, or the program
+   when libpure is linked statically), in UTF-8 as LLVM's loader expects. */
+static std::string libpure_self_path(const void *addr = 0)
+{
+  HMODULE m;
+  wchar_t buf[MAX_PATH];
+  std::string path;
+  if (!addr) addr = (const void*)&libpure_self_path;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+			 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			 (LPCWSTR)addr, &m)) {
+    DWORD n = GetModuleFileNameW(m, buf, MAX_PATH);
+    if (n > 0 && n < MAX_PATH &&
+	llvm::convertWideToUTF8(std::wstring(buf, n), path))
+      return path;
+  }
+  return "";
+}
 #endif
 
 
@@ -240,11 +262,7 @@ void interpreter::init()
       // Make libpure's symbols visible to the JIT. Load the copy that is
       // already running (see libpure_self_path); the bare soname, which the
       // dynamic loader matches against loaded objects, is the fallback.
-#ifndef _WIN32
       std::string self = libpure_self_path();
-#else
-      std::string self;
-#endif
       std::string libErr;
       if ((self.empty() ||
 	   llvm::sys::DynamicLibrary::LoadLibraryPermanently(self.c_str(),
@@ -252,6 +270,32 @@ void interpreter::init()
 	  llvm::sys::DynamicLibrary::LoadLibraryPermanently(LIBPURE, &libErr))
         std::cerr << "warning: failed to load " << LIBPURE << ": "
                   << libErr << '\n';
+    }
+#endif
+#ifdef _MSC_VER
+    {
+      // A Windows process has several C runtimes loaded: the one libpure is
+      // linked with (ucrtbase.dll with MSVC) and usually msvcrt.dll as
+      // well, which system DLLs use. (Only done for MSVC builds: a MinGW
+      // libpure links msvcrt.dll itself, and has not been tested this way.) They share no
+      // state; each has its own stdout buffer, heap and FILE objects. To
+      // look up a name, LLVM scans the process's modules in reverse load
+      // order, so a C function a Pure script declares extern (puts, fopen,
+      // malloc) could come from a runtime other than libpure's, and its
+      // output would interleave wrongly with Pure's own or it would crash
+      // on a FILE* from the other runtime. Load libpure's runtime
+      // explicitly and search the loaded libraries in load order (libpure,
+      // its runtime, then whatever Pure code loads) before the process.
+      // declare_extern registers the address found this way with the JIT
+      // as an absolute symbol, which takes precedence over the JIT's own
+      // search of the process.
+      std::string crt = libpure_self_path((const void*)&fputs);
+      if (!crt.empty())
+	llvm::sys::DynamicLibrary::LoadLibraryPermanently(crt.c_str(), 0);
+      llvm::sys::DynamicLibrary::SearchOrder =
+	llvm::sys::DynamicLibrary::SearchOrdering(
+	  llvm::sys::DynamicLibrary::SO_LoadedFirst |
+	  llvm::sys::DynamicLibrary::SO_LoadOrder);
     }
 #endif
     // Additional stuff to be loaded on some systems (e.g., Windows).
