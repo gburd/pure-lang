@@ -232,6 +232,14 @@ struct strcache {
 };
 static PURE_TLS_HOT thread_local per_thread<strcache> strcache_tls;
 
+// ictowcs' iconv descriptor (see there). At file scope, like strcache_tls:
+// as a function-local static, GCC gives it a TLS guard variable of its own.
+struct ic_t {
+  iconv_t ic = (iconv_t)-1;
+  ~ic_t() { if (ic != (iconv_t)-1) iconv_close(ic); }
+};
+static PURE_TLS_HOT thread_local per_thread<ic_t> myic_tls;
+
 //#define DEBUG_CACHE
 
 char *my_strdup(const char *s)
@@ -880,11 +888,6 @@ ictowcs(wchar_t *t, char *s)
   // was undefined behavior the moment two threads converted UTF-8 to
   // wchar_t concurrently, independent of any Pure-level memory-safety
   // concern.
-  struct ic_t {
-    iconv_t ic = (iconv_t)-1;
-    ~ic_t() { if (ic != (iconv_t)-1) iconv_close(ic); }
-  };
-  static PURE_TLS_HOT thread_local per_thread<ic_t> myic_tls;
   iconv_t& myic = myic_tls->ic;
   if (myic == (iconv_t)-1)
     myic = iconv_open("WCHAR_T", "UTF-8");

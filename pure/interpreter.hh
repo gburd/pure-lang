@@ -789,11 +789,7 @@ public:
   // controlling thread (the create-then-run model: pd-pure, pure-lv2,
   // and our own concurrency tests all create/use/delete on one thread),
   // so this is not a new constraint, just documented explicitly.
-  inline void purge_ectx()
-  {
-    if (id == last_ectx_id) { last_ectx_id = 0; last_ectx_ptr = 0; }
-    ectx_cache->erase(id);
-  }
+  void purge_ectx();
   map<uint32_t,void*> locals; // interpreter-local storage for applications
 
   bool defined_sym(int fno) {
@@ -1574,12 +1570,10 @@ private:
   // per thread -- mutated only by its own thread, so no lock is needed --
   // plus a single-slot fast path in front of it. last_ectx_id==0 means
   // the slot is empty (0 is never a valid `id`: new_id() starts at 1).
-  // ectx_cache is only touched on the slow path (an interpreter switch on
-  // this thread), so it lives on the heap (see per_thread in util.hh). The
-  // single-slot cache in front of it is on every hot path and is defined
-  // like g_interp above.
-  PURE_TLS_HOT static inline thread_local
-    per_thread<std::unordered_map<uint64_t, pure_ectx>> ectx_cache;
+  // The map is only touched on the slow path (an interpreter switch on this
+  // thread), so it lives on the heap, in interpreter.cc (ectx_cache; see
+  // per_thread in util.hh). The single-slot cache in front of it is on every
+  // hot path and is defined like g_interp above.
   PURE_TLS_HOT static inline thread_local uint64_t last_ectx_id = 0;
   PURE_TLS_HOT static inline thread_local pure_ectx *last_ectx_ptr = nullptr;
 

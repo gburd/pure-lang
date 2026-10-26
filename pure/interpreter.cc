@@ -109,6 +109,14 @@ int interpreter::stackdir = 0;
 bool interpreter::g_init = false;
 std::atomic<uint64_t> interpreter::next_id{1};
 
+// The map behind the single-slot cache. Defined here, in one translation
+// unit, rather than as an inline member in interpreter.hh: an inline
+// thread_local with a destructor needs a guard variable and an init flag in
+// the TLS segment, and with GCC that pushed libpure's segment over the 128
+// bytes FreeBSD reserves for dlopen (see test/dlopen.c).
+static PURE_TLS_HOT thread_local
+  per_thread<std::unordered_map<uint64_t, pure_ectx>> ectx_cache;
+
 // Per-thread ectx() cache -- see the comment on interpreter::ectx() in
 // interpreter.hh (moved there, and made inline, after profiling showed
 // the out-of-line, cross-translation-unit version costing ~13% of total
@@ -121,6 +129,12 @@ __attribute__((noinline)) pure_ectx& interpreter::ectx_slow()
   last_ectx_id = id;
   last_ectx_ptr = &e;
   return e;
+}
+
+void interpreter::purge_ectx()
+{
+  if (id == last_ectx_id) { last_ectx_id = 0; last_ectx_ptr = 0; }
+  ectx_cache->erase(id);
 }
 
 map<uint32_t, void (*)(void*)> interpreter::locals_destroy_cb;
