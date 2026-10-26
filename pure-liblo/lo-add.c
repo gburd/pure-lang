@@ -246,7 +246,7 @@ int Pure_lo_send(mylo_address t, const char *path, const char *types,
     return ret;
   }
 
-  ret = lo_send_message(t, path, msg);
+  ret = lo_send_message((lo_address)t, path, msg);
   lo_message_free(msg);
 
   return ret;
@@ -270,7 +270,7 @@ int Pure_lo_send_timestamped(mylo_address t, lo_timetag *ts,
   }
 
   lo_bundle_add_message(b, path, msg);
-  ret = lo_send_bundle(t, b);
+  ret = lo_send_bundle((lo_address)t, b);
   lo_message_free(msg);
   lo_bundle_free(b);
 
@@ -300,9 +300,9 @@ int Pure_lo_send_from(mylo_address to, lo_server from, lo_timetag *ts,
 
   if (b) {
     lo_bundle_add_message(b, path, msg);
-    ret = lo_send_bundle_from(to, from, b);
+    ret = lo_send_bundle_from((lo_address)to, from, b);
   } else {
-    ret = lo_send_message_from(to, from, path, msg);
+    ret = lo_send_message_from((lo_address)to, from, path, msg);
   }
 
   // Free-up memory
@@ -736,7 +736,7 @@ static size_t packet_size(const char *host, const char *port, int proto,
       sz += m;
       break;
     case LO_BLOB:
-      m = lo_blob_datasize(argv[i]);
+      m = lo_blob_datasize((lo_blob)argv[i]);
       sz += sizeof(size_t);
       sz += m;
       break;
@@ -801,9 +801,9 @@ static bool write_packet(const char *host, const char *port, int proto,
       jack_ringbuffer_write(rb, (char*)argv[i++], m);
       break;
     case LO_BLOB:
-      m = lo_blob_datasize(argv[i]);
+      m = lo_blob_datasize((lo_blob)argv[i]);
       jack_ringbuffer_write(rb, (char*)&m, sizeof(size_t));
-      jack_ringbuffer_write(rb, (char*)lo_blob_dataptr(argv[i++]), m);
+      jack_ringbuffer_write(rb, (char*)lo_blob_dataptr((lo_blob)argv[i++]), m);
       break;
     case LO_TIMETAG:
       jack_ringbuffer_write(rb, (char*)argv[i++], sizeof(lo_timetag));
@@ -880,7 +880,7 @@ static void read_packet(char **host, char **port, int *proto,
       jack_ringbuffer_read(rb, (char*)&m, sizeof(size_t));
       buf = calloc(m+1, 1); assert(buf);
       jack_ringbuffer_read(rb, buf, m);
-      (*argv)[i++] = lo_blob_new(m, buf); free(buf);
+      (*argv)[i++] = (lo_arg*)lo_blob_new(m, buf); free(buf);
       break;
     case LO_TIMETAG:
       buf = malloc(sizeof(lo_timetag)); assert(buf);
@@ -927,8 +927,8 @@ int Pure_osc_handler(const char *path, const char *types, lo_arg **argv,
 pure_expr *Pure_osc_recv_noblock(void)
 {
   pure_expr *res;
-  mylo_address src;
-  mylo_message msg;
+  lo_address src;
+  lo_message msg;
   char *host, *port, *path, *types, *_types;
   int proto;
   lo_timetag ts;
@@ -939,7 +939,7 @@ pure_expr *Pure_osc_recv_noblock(void)
   _types = types;
   /* Reconstruct the message. */
   src = lo_address_new(host, port);
-  src->protocol = proto;
+  ((mylo_address)src)->protocol = proto;
   msg = lo_message_new();
   assert(src && msg);
   /* We have to to go a long way here. There must be a better way to do this. */
@@ -993,9 +993,9 @@ pure_expr *Pure_osc_recv_noblock(void)
     }
   }
   argc = i;
-  msg->source = src;
+  ((mylo_message)msg)->source = src;
 #if HAVE_TIMETAG
-  msg->ts = ts;
+  ((mylo_message)msg)->ts = ts;
 #endif
   res = pure_tuplel(2, pure_cstring_dup(path), pure_pointer(msg));
   free(host); free(port); free(path); free(_types);
