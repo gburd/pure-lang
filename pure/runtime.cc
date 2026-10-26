@@ -16863,7 +16863,7 @@ struct index_entry_t {
   size_t i; // field index in vector
 };
 
-struct index_t {
+struct record_index {
   size_t n, k; // total record size and number of index entries
   index_entry_t *ix; // pointer to index data
 };
@@ -16898,26 +16898,26 @@ static int indexcmps(const void *m1, const void *m2)
 
 static void free_record(void *q)
 {
-  index_t *idx = (index_t*)q;
+  record_index *idx = (record_index*)q;
   if (idx->ix) free(idx->ix);
   free(q);
 }
 
-static bool is_record(pure_expr *x, pure_expr** &data, index_t* &idx)
+static bool is_record(pure_expr *x, pure_expr** &data, record_index* &idx)
 {
   if (x->tag == EXPR::MATRIX) {
     gsl_matrix_symbolic *m = (gsl_matrix_symbolic*)x->data.mat.p;
     const size_t n1 = m->size1, n2 = m->size2;
     if (m->q) {
       data = m->data;
-      idx = (index_t*)m->q;
+      idx = (record_index*)m->q;
       return true;
     } else if (n1 <= 1 || n2 <= 1) {
       size_t n = n1*n2;
       data = m->data;
       if (n > 0) {
 	// Allocate the index.
-	idx = (index_t*)malloc(sizeof(index_t));
+	idx = (record_index*)malloc(sizeof(record_index));
 	if (!idx) return false;
 	idx->ix = (index_entry_t*)malloc(n*sizeof(index_entry_t));
 	if (!idx->ix) {
@@ -16954,7 +16954,7 @@ static bool is_record(pure_expr *x, pure_expr** &data, index_t* &idx)
 	  idx->k = k;
 	}
       } else {
-	idx = (index_t*)malloc(sizeof(index_t));
+	idx = (record_index*)malloc(sizeof(record_index));
 	if (!idx) return false;
 	idx->n = idx->k = 0;
 	idx->ix = 0;
@@ -16967,7 +16967,7 @@ static bool is_record(pure_expr *x, pure_expr** &data, index_t* &idx)
     return false;
 }
 
-static bool record_lookup(pure_expr **data, index_t *idx,
+static bool record_lookup(pure_expr **data, record_index *idx,
 			  pure_expr *x, size_t &i)
 {
   if (x->tag <= 0 && x->tag != EXPR::STR) return false;
@@ -16981,7 +16981,7 @@ static bool record_lookup(pure_expr **data, index_t *idx,
     return false;
 }
 
-static bool record_lookup(pure_expr **data, index_t *idx,
+static bool record_lookup(pure_expr **data, record_index *idx,
 			  pure_expr *x, pure_expr* &y)
 {
   if (x->tag <= 0 && x->tag != EXPR::STR) return false;
@@ -17003,7 +17003,7 @@ static bool record_lookup(pure_expr **data, index_t *idx,
 bool record_check(pure_expr *x)
 {
   pure_expr **data;
-  index_t *idx;
+  record_index *idx;
   return is_record(x, data, idx);
 }
 
@@ -17011,7 +17011,7 @@ extern "C"
 bool record_member(pure_expr *x, pure_expr *y)
 {
   pure_expr **data;
-  index_t *idx;
+  record_index *idx;
   if (is_record(x, data, idx)) {
     size_t i;
     return record_lookup(data, idx, y, i);
@@ -17023,7 +17023,7 @@ extern "C"
 pure_expr* record_elem_at(pure_expr *x, pure_expr *y)
 {
   pure_expr **data;
-  index_t *idx;
+  record_index *idx;
   if (is_record(x, data, idx)) {
     pure_expr *z;
     if (record_lookup(data, idx, y, z))
@@ -17038,7 +17038,7 @@ extern "C"
 pure_expr* record_update(pure_expr *x, pure_expr *u, pure_expr *v)
 {
   pure_expr **data;
-  index_t *idx;
+  record_index *idx;
   if (is_record(x, data, idx)) {
     interpreter& interp = *interpreter::g_interp;
     gsl_matrix_symbolic *m;
@@ -17085,7 +17085,7 @@ extern "C"
 pure_expr* record_delete(pure_expr *x, pure_expr *y)
 {
   pure_expr **data;
-  index_t *idx;
+  record_index *idx;
   if (is_record(x, data, idx)) {
     size_t i;
     if (!record_lookup(data, idx, y, i)) return x;
@@ -17113,7 +17113,7 @@ extern "C"
 pure_expr* record_pack(pure_expr *x)
 {
   pure_expr **data;
-  index_t *idx;
+  record_index *idx;
   if (is_record(x, data, idx)) {
     const size_t n = idx->n, k = idx->k;
     if (n == k) {
