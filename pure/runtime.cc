@@ -7423,6 +7423,11 @@ static void pure_debug_backtrace(ostream& out)
   ectx.sstk_sz = save_sz;
 }
 
+// The debugger's command line reader (lexer.ll). Declared here, at file
+// scope, so that it has C++ linkage like its definition; declared inside
+// the extern "C" function below it would have C linkage.
+extern char *(*command_input2)(const char *prompt);
+
 extern "C"
 void pure_debug_rule(void *_e, void *_r)
 {
@@ -7485,7 +7490,6 @@ void pure_debug_rule(void *_e, void *_r)
   bool done = false;
   while (!done) {
     string cmdline, cmd, arg;
-    extern char *(*command_input2)(const char *prompt);
     if (!cin.eof() && command_input2) {
       char *s = command_input2(": ");
       if (s)
