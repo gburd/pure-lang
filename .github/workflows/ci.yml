@@ -12,12 +12,18 @@ env:
 
 jobs:
   build-ubuntu:
-    name: Build and Test with LLVM ${{ matrix.llvm-version }} on Ubuntu
+    name: Build and Test with LLVM ${{ matrix.llvm-version }} on Ubuntu (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         llvm-version: [20, 21, 22]
+        compiler: [clang]
+        include:
+          # GCC evaluates function arguments in a different order than clang
+          # and warns about different things; build with it too.
+          - llvm-version: 21
+            compiler: gcc
 
     steps:
       - name: Checkout code
@@ -45,10 +51,13 @@ jobs:
         working-directory: pure
         run: |
           autoreconf -fi
-          ./configure --with-llvm-version=${{ matrix.llvm-version }} \
-            CC=clang-${{ matrix.llvm-version }} \
-            CXX=clang++-${{ matrix.llvm-version }}
-          make -j$(nproc)
+          if [ "${{ matrix.compiler }}" = gcc ]; then
+            CC=gcc CXX=g++
+          else
+            CC=clang-${{ matrix.llvm-version }} CXX=clang++-${{ matrix.llvm-version }}
+          fi
+          ./configure --with-llvm-version=${{ matrix.llvm-version }} CC="$CC" CXX="$CXX"
+          make -j"$(nproc)"
         env:
           CXXFLAGS: "-O2"
 
@@ -69,7 +78,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
-          name: test-results-llvm${{ matrix.llvm-version }}
+          name: test-results-llvm${{ matrix.llvm-version }}-${{ matrix.compiler }}
           path: |
             pure/test/*.diff
 
