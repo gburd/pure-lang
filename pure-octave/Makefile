@@ -36,9 +36,12 @@ mkoctfile = mkoctfile
 octversion = $(shell $(mkoctfile) --version 2>&1 | sed -e 's/^mkoctfile, version \([0-9.]*\).*/\1/' | sed -e 's/\([0-9]*\)[.]\([0-9]*\).*/\1 \2/')
 octversionflag = -DOCTAVE_MAJOR=$(word 1,$(octversion)) -DOCTAVE_MINOR=$(word 2,$(octversion))
 
-# Add the -rpath flag so that the dynamic linker finds liboctave.so etc. when
-# Pure loads the module. NOTE: This doesn't seem to be needed any more.
-RLD_FLAG=$(shell $(mkoctfile) -p RLD_FLAG 2>/dev/null)
+# Record where Octave's libraries are, so that the dynamic linker finds
+# liboctinterp and liboctave when Pure loads the module. Distributions put
+# them outside the default search path (/usr/lib/<triple>/octave/<version>
+# on Debian). mkoctfile's RLD_FLAG, which used to provide this, has been
+# empty since Octave 3.6.
+RLD_FLAG=-Wl,-rpath,$(shell $(mkoctfile) -p OCTLIBDIR)
 
 # Octave 5.1 doesn't automatically include these linker options any more.
 OCT_FLAGS=-L$(shell $(mkoctfile) -p OCTLIBDIR) $(shell $(mkoctfile) -p LIBOCTINTERP) $(shell $(mkoctfile) -p LIBOCTAVE)
