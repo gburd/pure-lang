@@ -20,9 +20,10 @@ Requirements
 As of version 0.5, pure-gen is now compiled to a native executable. You'll
 need Pure 0.21 or later and the basic LLVM toolchain to make this work.
 
-pure-gen also requires gcc (-E) as its C preprocessor *at runtime*. Moreover,
-it needs a version of gcc which understands the -fdirectives-only option,
-which means gcc >= 4.3. It will run with older versions of gcc, but then
+pure-gen also requires gcc (-E) as its C preprocessor *at runtime*, or the
+system cc where gcc is not installed (clang has been used on FreeBSD).
+Moreover, it needs a preprocessor which understands the -fdirectives-only
+option, which means gcc >= 4.3. It will run with older versions of gcc, but then
 you'll get an error message from gcc indicating that it doesn't understand the
 -fdirectives-only option. pure-gen then won't be able to extract any
 ``#define``\ d constants from the header files.

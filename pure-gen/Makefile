@@ -32,7 +32,9 @@ GHCFLAGS = -dynamic
 
 # Try to guess the host system type and do platform-specific setup.
 host = $(shell ./config.guess)
-gcc = gcc
+# The C preprocessor dump-ast runs. gcc if installed, else the system cc
+# (clang on FreeBSD and macOS).
+gcc = $(shell command -v gcc >/dev/null 2>&1 && echo gcc || echo cc)
 ifneq "$(findstring -mingw,$(host))" ""
 # Windows
 EXE = .exe
@@ -42,8 +44,8 @@ endif
 ifneq "$(findstring -darwin,$(host))" ""
 # OSX: Try to find a suitable gcc version to be used as the C preprocessor.
 # The following assumes that a recent gcc version from MacPorts is installed.
-# Note that we *really* need gcc (4.3+) here, pure-gen does *not* work when
-# using clang (the system compiler on newer OS X versions) instead.
+# Note that we *really* need gcc (4.3+) here; pure-gen did *not* work with
+# the clang of older OS X versions. (Current clang, e.g. on FreeBSD, works.)
 gcc = $(lastword gcc $(sort $(wildcard /opt/local/bin/gcc-mp-*)))
 endif
 ifneq "$(findstring x86_64-,$(host))" ""
