@@ -48,8 +48,8 @@ ifneq "$(findstring -darwin,$(host))" ""
 # the clang of older OS X versions. (Current clang, e.g. on FreeBSD, works.)
 gcc = $(lastword gcc $(sort $(wildcard /opt/local/bin/gcc-mp-*)))
 endif
-ifneq "$(findstring x86_64-,$(host))" ""
-# 64 bit, needs -fPIC flag
+ifeq "$(findstring -darwin,$(host))$(findstring -mingw,$(host))$(findstring -cygwin,$(host))" ""
+# ELF shared objects need -fPIC, whatever the CPU
 PIC = -fPIC
 endif
 
