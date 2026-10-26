@@ -52,6 +52,7 @@ PIC = -fPIC
 endif
 
 DISTFILES = COPYING ChangeLog Makefile config.guess README README.dump-ast \
+cabal.project dump-ast.cabal \
 dump-ast.hs dump-ast-old.hs pure-gen.pure pure-gen.1 pure-gen.txt run-tests \
 debian/* examples/*.templ language-c/*
 
@@ -77,10 +78,11 @@ pure-gen: pure-gen.pure
 # the library. (If you can figure out which changes are needed in dump-ast to
 # compile against the latest version, please let me know!)
 
-# If a suitable language-c version is not readily available, you can run this
-# to install the included language-c 0.5.0 locally using cabal.
-cabal-install:
-	cd language-c && cabal v1-update && cabal v1-install
+# If a suitable language-c version is not readily available, 'make' builds
+# dump-ast against the included language-c 0.5.0 with cabal (see
+# maintainer-build below). This used to install language-c with cabal's v1
+# commands, which current cabal-install no longer has.
+cabal-install: maintainer-build
 
 # These options work around quirks with various ghc versions.
 GHCXFLAGS += -XTypeSynonymInstances -XFlexibleInstances
@@ -105,15 +107,16 @@ dump-ast: dump-ast.hs
 # the path, to make static builds work.
 maintainer-build: export PATH := /usr/share/ghc-pristine/bin:$(PATH)
 
+# Build dump-ast against the included language-c with cabal's v2 (project)
+# commands, as described by cabal.project and dump-ast.cabal. cabal-install
+# 3.6 removed the v1-update command this target used to run. The Haskell
+# libraries are linked into the executable, so nothing has to be installed.
+# This needs cabal-install 3.0 or later; the package index update may fail
+# without network access, which is fine if the dependencies are cached.
 maintainer-build:
-# Install locally into the build directory.
-	cd language-c && HOME=$(shell pwd)/cabal cabal v1-update && HOME=$(shell pwd)/cabal cabal v1-install
-# Make sure to do a static build here, since the cabal-installed language-c
-# will be gone once we're finished.
-	$(MAKE) all GHCFLAGS=-static HOME=$(shell pwd)/cabal
-# Clean up.
-	HOME=$(shell pwd)/cabal ghc-pkg unregister language-c
-	rm -rf cabal language-c/dist
+	-cabal v2-update
+	cabal v2-install --installdir=. --install-method=copy --overwrite-policy=always exe:dump-ast
+	$(MAKE) pure-gen
 
 # Same as above, but without using cabal, which won't work on Launchpad where
 # we don't have a working Internet connection.
@@ -134,7 +137,7 @@ check:
 
 clean:
 	rm -f pure-gen$(EXE) dump-ast$(EXE) *~ *.hi *.o
-	rm -rf cabal language-c/dist
+	rm -rf cabal language-c/dist dist-newstyle
 
 install:
 	test -d "$(DESTDIR)$(bindir)" || mkdir -p "$(DESTDIR)$(bindir)"
