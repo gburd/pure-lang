@@ -263,8 +263,10 @@ void interpreter::init()
   //   PC-relative addressing with a ±2GB range.  PIC mode ensures external
   //   symbols are accessed through GOT/PLT (which JITLink places co-located
   //   with JIT code), avoiding overflow for far symbols.
-  // AArch64/x86_64: CodeModel::Large avoids ADRP/Page21 range errors
-  //   by using absolute 64-bit addressing sequences.
+  // AArch64/x86_64: CodeModel::Large.  Note that LLJIT makes JITLink code
+  //   PIC, and on AArch64 ELF the large model then still reaches globals
+  //   with ADRP (Page21); submit_module clears dso_local there, as on RISC-V,
+  //   so that globals are reached through the GOT.
   auto TripleStr = JTMB->getTargetTriple().getTriple();
   bool isRISCV = (TripleStr.find("riscv") != std::string::npos);
 
@@ -1038,10 +1040,11 @@ void interpreter::submit_module() {
       }
     }
   }
-#if defined(__riscv)
+#if defined(__riscv) || defined(__aarch64__)
   // On RISC-V, clear dso_local on all external functions so the backend
   // generates PLT calls (R_RISCV_CALL_PLT) instead of direct calls.
-  // JITLink creates PLT stubs co-located with JIT code.
+  // JITLink creates PLT stubs co-located with JIT code.  On AArch64 it
+  // makes taking a function's address go through the GOT as well.
   for (auto &F : *ClonedModule) {
     if (F.getLinkage() == llvm::GlobalValue::ExternalLinkage)
       F.setDSOLocal(false);
@@ -1063,13 +1066,15 @@ void interpreter::submit_module() {
     } else if (GV.getLinkage() == llvm::GlobalValue::InternalLinkage) {
       GV.setLinkage(llvm::GlobalValue::ExternalLinkage);
     }
-#if defined(__riscv)
+#if defined(__riscv) || defined(__aarch64__)
     // On RISC-V in PIC mode, external symbols accessed via direct
     // PC-relative addressing (R_RISCV_PCREL_HI20) can overflow when
     // >2GB from JIT code.  Clearing dso_local forces the backend to
     // use GOT-relative accesses (R_RISCV_GOT_HI20) instead.  JITLink
     // places the GOT in JIT memory (always within ±2GB of code), and
     // GOT entries hold full 64-bit addresses with no range constraint.
+    // AArch64 has the same problem with ADRP (R_AARCH64_ADR_PREL_PG_HI21,
+    // ±4GB): most globals are absolute symbols on the C heap.
     // Note: dso_local is implicitly set when creating InternalLinkage
     // globals and is NOT cleared when linkage changes to External.
     if (GV.getLinkage() == llvm::GlobalValue::ExternalLinkage)
