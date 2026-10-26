@@ -380,17 +380,13 @@ AC_SUBST(LLVM_FLAGS)
 LLVM_LDFLAGS=$($LLVMCONF --ldflags)
 AC_SUBST(LLVM_LDFLAGS)
 
-# 64 bit needs -fPIC flag (apparently not needed on OSX, though)
-# FIXME: this should be set based on a check
+# Code linked into a shared library must be position-independent on ELF
+# platforms, whatever the CPU (not needed on OSX or Windows, though).
 PIC=
 case $host in
-*x86_64-*)
-  case $host in
-  *-darwin*) ;;
-  *-*-mingw*) ;;
-  *) PIC=-fPIC ;;
-  esac
-  ;;
+*-darwin*) ;;
+*-*-mingw*|*-*-cygwin*) ;;
+*) PIC=-fPIC ;;
 esac
 AC_SUBST(PIC)
 AC_DEFINE_UNQUOTED(PURE_PIC, "${PIC}", [PIC compiler flag for shared libraries. Named PURE_PIC to avoid conflict with LLVM PassInstrumentationCallbacks parameter.])
