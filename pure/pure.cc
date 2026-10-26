@@ -175,8 +175,9 @@ static int32_t f, n;
 static void
 init_generator(const char *text, int state)
 {
-  assert(interpreter::g_interp);
-  interpreter& interp = *interpreter::g_interp;
+  interpreter *ip = (interpreter*)pure_current_interp();
+  assert(ip);
+  interpreter& interp = *ip;
   command_index = keyword_index = 0;
   // Must do this here, so that symbols are entered into the globalvars table.
   interp.compile();
@@ -262,8 +263,9 @@ command_keyword_generator(const char *text, int state)
 static char *
 symbol_generator(const char *text, int state)
 {
-  assert(interpreter::g_interp);
-  interpreter& interp = *interpreter::g_interp;
+  interpreter *ip = (interpreter*)pure_current_interp();
+  assert(ip);
+  interpreter& interp = *ip;
 
   /* New match. */
   if (!state) init_generator(text, state);
@@ -340,8 +342,9 @@ pure_completion(const char *text, int start, int end)
      or symbols at the real beginning of the line. In normal mode we match both
      commands, keywords and symbols at the beginning of a line. In all other
      cases, just the symbols are matched. */
-  assert(interpreter::g_interp);
-  interpreter& interp = *interpreter::g_interp;
+  interpreter *ip = (interpreter*)pure_current_interp();
+  assert(ip);
+  interpreter& interp = *ip;
   char esc = interp.escape_mode;
 
   /* If this word is at the start of the line, then it might be a command or
@@ -367,9 +370,9 @@ pure_completion(const char *text, int start, int end)
 
 /* Interactive command line, using readline/libedit. */
 
-extern char *(*command_input)(const char *prompt);
-extern char *(*command_input2)(const char *prompt);
-extern void (*exit_handler)();
+extern PURE_IMPORT char *(*command_input)(const char *prompt);
+extern PURE_IMPORT char *(*command_input2)(const char *prompt);
+extern PURE_IMPORT void (*exit_handler)();
 
 static char *my_command_input(const char *prompt)
 {
@@ -410,14 +413,6 @@ static char *my_command_input2(const char *prompt)
 }
 
 #endif
-
-static void sig_handler(int sig)
-{
-#ifdef MUST_REINSTALL_SIGHANDLERS
-  signal(sig, sig_handler);
-#endif
-  interpreter::brkflag = sig;
-}
 
 #ifdef HAVE_READLINE_HISTORY
 static const char *histfile = 0;
@@ -540,8 +535,10 @@ main(int argc, char *argv[])
 #endif
   list<string> libnames;
   string llcopts;
-  // This is used in advisory stack checks.
-  interpreter::baseptr = &base;
+  // This is used in advisory stack checks. The base is libpure's
+  // per-thread state; on Windows the program cannot reach libpure's
+  // thread-local variables directly, so set it through the runtime API.
+  pure_set_stack_limit(&base, 0);
   // We always ignore SIGPIPE by default.
 #ifdef SIGPIPE
   signal(SIGPIPE, SIG_IGN);
@@ -914,24 +911,25 @@ main(int argc, char *argv[])
      termination signals (except SIGKILL which is unmaskable). These are
      mapped to Pure exceptions of the form 'signal SIG', so that they can be
      caught with 'catch' or safely return us to the interpreter's interactive
-     command line. */
+     command line. The runtime's handler (pure_trap) sets the interrupt
+     flag that compiled code checks. */
 #ifdef SIGHUP
-  signal(SIGHUP, sig_handler);
+  pure_trap(1, SIGHUP);
 #endif
 #ifdef SIGINT
-  signal(SIGINT, sig_handler);
+  pure_trap(1, SIGINT);
 #endif
 #ifdef SIGALRM
-  signal(SIGALRM, sig_handler);
+  pure_trap(1, SIGALRM);
 #endif
 #ifdef SIGTERM
-  signal(SIGTERM, sig_handler);
+  pure_trap(1, SIGTERM);
 #endif
 #ifdef SIGUSR1
-  signal(SIGUSR1, sig_handler);
+  pure_trap(1, SIGUSR1);
 #endif
 #ifdef SIGUSR2
-  signal(SIGUSR2, sig_handler);
+  pure_trap(1, SIGUSR2);
 #endif
 #ifdef _WIN32
   InstallSignalHandler();

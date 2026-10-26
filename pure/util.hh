@@ -40,6 +40,15 @@
 #define PURE_TLS_HOT
 #endif
 
+/* Variables that the pure program (pure.cc) uses from libpure. A Windows
+   program sees a DLL's variables only through declarations marked
+   dllimport; MinGW's linker imports them automatically. */
+#if defined(_MSC_VER) && !defined(PURE_BUILDING_LIBPURE)
+#define PURE_IMPORT __declspec(dllimport)
+#else
+#define PURE_IMPORT
+#endif
+
 /* A T for each thread, allocated on first use and destroyed when the
    thread exits. Declare one as
      static PURE_TLS_HOT thread_local per_thread<T> x;

@@ -1582,7 +1582,7 @@ public:
   PURE_TLS_HOT static inline thread_local int brkmask = 0;
   PURE_TLS_HOT static inline thread_local char *baseptr = nullptr;
   // Genuinely global, read-only after startup.
-  static int stackmax;
+  PURE_IMPORT static int stackmax;
   static int stackdir;
   // Monotonic, never-reused identity for ectx() lookups (interpreter.cc).
   // A raw `this` pointer is not safe to use as the cache key: once an
