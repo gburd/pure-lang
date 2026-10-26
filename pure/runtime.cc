@@ -112,6 +112,21 @@ typedef std::complex<double> Complex;
 #undef longjmp
 #define setjmp  __builtin_setjmp
 #define longjmp  __builtin_longjmp
+#elif defined(_MSC_VER) && defined(_M_X64)
+/* The same problem with the Microsoft compiler. Its setjmp records the
+   frame in the jmp_buf, and longjmp then unwinds the stack to it with the
+   Win64 exception tables, as for a C++ exception. JIT-compiled Pure code
+   has no unwind tables, so a throw from Pure code dies in that unwind
+   (STATUS_BAD_STACK). With the frame cleared, longjmp only restores the
+   saved registers, which is what longjmp does on other systems: the
+   runtime frames in between are abandoned without running destructors. */
+#undef longjmp
+#define longjmp(buf, val) \
+  (((_JUMP_BUFFER*)(buf))->Frame = 0, longjmp(buf, val))
+/* With the frame cleared, longjmp also skips the unwinder's checks of the
+   hardware shadow stack, so libpure must not be linked with /CETCOMPAT. */
+#elif defined(_MSC_VER)
+#error "longjmp over JIT-compiled frames is only handled for x64 with MSVC"
 #endif
 
 /* Implement the basic GSL-like operations on the matrix types that we need.
