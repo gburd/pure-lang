@@ -38,7 +38,7 @@ octversionflag = -DOCTAVE_MAJOR=$(word 1,$(octversion)) -DOCTAVE_MINOR=$(word 2,
 
 # Add the -rpath flag so that the dynamic linker finds liboctave.so etc. when
 # Pure loads the module. NOTE: This doesn't seem to be needed any more.
-RLD_FLAG=$(shell $(mkoctfile) -p RLD_FLAG)
+RLD_FLAG=$(shell $(mkoctfile) -p RLD_FLAG 2>/dev/null)
 
 # Octave 5.1 doesn't automatically include these linker options any more.
 OCT_FLAGS=-L$(shell $(mkoctfile) -p OCTLIBDIR) $(shell $(mkoctfile) -p LIBOCTINTERP) $(shell $(mkoctfile) -p LIBOCTAVE)
