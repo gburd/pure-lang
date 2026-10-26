@@ -12,10 +12,27 @@
    Usage: test/dlopen path/to/libpure.so */
 
 #define _GNU_SOURCE /* dl_iterate_phdr on glibc */
-#include <dlfcn.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef _WIN32
+/* LoadLibrary and GetProcAddress do what dlopen and dlsym do here. */
+#include <windows.h>
+#define RTLD_NOW 0
+#define RTLD_GLOBAL 0
+#define dlopen(name, flags) ((void *) LoadLibraryA(name))
+#define dlsym(h, name) ((void *) GetProcAddress((HMODULE) (h), name))
+static const char *dlerror(void)
+{
+	static char buf[32];
+	snprintf(buf, sizeof buf, "error %lu", (unsigned long) GetLastError());
+	return buf;
+}
+#else
+#include <dlfcn.h>
+#endif
 
 #if defined(__ELF__)
 #include <link.h>
@@ -55,7 +72,7 @@ static int run(const char *expr, int want)
 static void *thread_main(void *arg)
 {
 	(void) arg;
-	return (void *) (long) run("6*7", 42);
+	return (void *) (intptr_t) run("6*7", 42);
 }
 
 #if defined(__ELF__)

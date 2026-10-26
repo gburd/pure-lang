@@ -22,6 +22,10 @@
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
+#ifdef _WIN32
+#include <windows.h>
+#include <psapi.h>
+#endif
 #include "runtime.h"
 
 static int failures = 0;
@@ -53,6 +57,11 @@ static long heap_in_use(void)
 {
 #if defined(__GLIBC__) && (__GLIBC__ > 2 || __GLIBC_MINOR__ >= 33)
   return (long)mallinfo2().uordblks;
+#elif defined(_WIN32)
+  /* The Universal C Runtime allocates from the process heap. */
+  HEAP_SUMMARY hs;
+  hs.cb = sizeof hs;
+  return HeapSummary(GetProcessHeap(), 0, &hs) ? (long)hs.cbAllocated : -1;
 #else
   return -1;
 #endif
@@ -77,6 +86,21 @@ static int libpure_copies(void)
 {
   int n = 0;
   dl_iterate_phdr(count_cb, &n);
+  return n;
+}
+#elif defined(_WIN32)
+static int libpure_copies(void)
+{
+  HMODULE mods[1024];
+  DWORD bytes;
+  char name[MAX_PATH];
+  int i, n = 0;
+  if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof mods, &bytes))
+    return -1;
+  for (i = 0; i < (int)(bytes / sizeof mods[0]) && i < 1024; i++)
+    if (GetModuleBaseNameA(GetCurrentProcess(), mods[i], name, sizeof name) &&
+	_strnicmp(name, "libpure", 7) == 0)
+      n++;
   return n;
 }
 #else
