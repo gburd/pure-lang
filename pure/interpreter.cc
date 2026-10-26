@@ -1377,11 +1377,18 @@ void interpreter::init_sys_vars(const string& version,
   cdf(interp, "SIZEOF_SIZE_T",	pure_int(sizeof(size_t)));
   cdf(interp, "SIZEOF_FLOAT",	pure_int(sizeof(float)));
   cdf(interp, "SIZEOF_DOUBLE",	pure_int(sizeof(double)));
+  // A complex number is laid out as an array of two of its real type
+  // (C11 6.2.5), so these are known even where the C++ compiler has no
+  // _Complex (MSVC).
 #ifdef HAVE__COMPLEX_FLOAT
   cdf(interp, "SIZEOF_COMPLEX_FLOAT",	pure_int(sizeof(_Complex float)));
+#else
+  cdf(interp, "SIZEOF_COMPLEX_FLOAT",	pure_int(2*sizeof(float)));
 #endif
 #ifdef HAVE__COMPLEX_DOUBLE
   cdf(interp, "SIZEOF_COMPLEX_DOUBLE",	pure_int(sizeof(_Complex double)));
+#else
+  cdf(interp, "SIZEOF_COMPLEX_DOUBLE",	pure_int(2*sizeof(double)));
 #endif
   cdf(interp, "SIZEOF_POINTER",	pure_int(sizeof(void*)));
   swap_interpreters(s_interp);
