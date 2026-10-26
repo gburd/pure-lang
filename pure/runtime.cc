@@ -13408,6 +13408,12 @@ void pure_tzset(void)
 # endif
 #endif
   tzset();
+#ifdef _MSC_VER
+  // The Microsoft C runtime has these only under their ISO names.
+  long timezone = _timezone;
+  int daylight = _daylight;
+  char **tzname = _tzname;
+#endif
   df(interp, "timezone",	pure_int(timezone));
   df(interp, "daylight",	pure_int(daylight));
   df(interp, "tzname",		pure_listl(2, pure_cstring_dup(tzname[0]),
@@ -13730,6 +13736,7 @@ unsigned int sleep(unsigned int secs)
    from libmingwex.a (these are in C99, but not in the Windows system
    libraries, and LLVM doesn't know how to get them either). */
 
+#ifndef _MSC_VER // MSVC: see win32/posix.c
 extern "C"
 double __round(double x)
 {
@@ -13741,6 +13748,7 @@ double __trunc(double x)
 {
   return trunc(x);
 }
+#endif
 
 extern "C"
 double __asinh(double x)
