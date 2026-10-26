@@ -82,7 +82,7 @@ static PURE_TLS_HOT thread_local per_thread<runtime_tls> rt_tls;
 #include <sys/wait.h>
 #endif
 
-#ifdef __MINGW32__
+#ifdef _WIN32
 #include <process.h>
 #endif
 
@@ -13481,7 +13481,7 @@ double pure_gettimeofday(void)
 #endif
 #endif
 
-#ifdef __MINGW32__
+#ifdef _WIN32
 #include <windows.h>
 double pure_nanosleep(double t)
 {
@@ -13536,7 +13536,7 @@ double pure_nanosleep(double t)
 }
 #endif
 
-#ifndef __MINGW32__
+#ifndef _WIN32
 extern "C"
 int spawnv(int mode, const char *prog, char * const argv[])
 {

@@ -55,8 +55,10 @@
 #ifndef HAVE_MKSTEMP
 
 #include <fcntl.h>
+#ifndef _S_IREAD
 #define _S_IREAD 256
 #define _S_IWRITE 128
+#endif
 
 extern "C"
 int mkstemp(char *tmpl)

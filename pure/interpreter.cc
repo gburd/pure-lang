@@ -40,7 +40,7 @@ char *alloca ();
 #include <stdarg.h>
 #include <errno.h>
 #include <sys/types.h>
-#ifndef __MINGW32__
+#ifndef _WIN32
 #include <sys/wait.h>
 #endif
 #if USE_PCRE
@@ -1652,8 +1652,8 @@ static string searchdir(const string& srcdir, const string& libdir,
   }
  found:
   if (!absname(fname)) fname = workdir+fname;
-  char buf[BUFSIZE];
 #ifndef _WIN32
+  char buf[BUFSIZE];
   if (chklink(fname)) {
     // follow symbolic link to its destination
     int l = readlink(fname.c_str(), buf, BUFSIZE-1);
@@ -2917,7 +2917,7 @@ static string lang_tag(string &code, string &modname)
   return tag;
 }
 
-#ifdef __MINGW32__
+#ifdef _WIN32
 #include <process.h>
 #define WIFEXITED(w)   (((w) & 0XFFFFFF00) == 0)
 #define WEXITSTATUS(w) (w)
@@ -10737,7 +10737,7 @@ static inline bool is_tmpvar(const string& name, string& label)
 }
 #endif
 
-#ifdef __MINGW32__
+#ifdef _WIN32
 // The Windows shell doesn't understand backslash escapes, but double
 // quotes should work.
 static string& quote(string& s)
