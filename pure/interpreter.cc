@@ -123,7 +123,7 @@ static PURE_TLS_HOT thread_local
 // runtime on a `fib 30` run: an unordered_map lookup on every hot-path
 // call, plus a real shared-library call boundary at every runtime.cc/
 // printer.cc call site).
-__attribute__((noinline)) pure_ectx& interpreter::ectx_slow()
+PURE_NOINLINE pure_ectx& interpreter::ectx_slow()
 {
   return ectx_cache.get()[id];
 }
@@ -181,9 +181,7 @@ namespace {
    one frame in no particular order; with clang 22 on FreeBSD it then
    reported an upward stack, which disabled the C stack overflow check. */
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((noinline))
-#endif
+PURE_NOINLINE
 static int c_stack_dir_tester(volatile char *callerptr)
 {
   volatile char tester = 0;

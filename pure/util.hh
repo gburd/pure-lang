@@ -40,6 +40,22 @@
 #define PURE_TLS_HOT
 #endif
 
+/* Branch hints and noinline, for compilers with and without the GNU
+   extensions (MSVC). */
+#if defined(__GNUC__) || defined(__clang__)
+#define PURE_LIKELY(x) __builtin_expect(!!(x), 1)
+#define PURE_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#define PURE_NOINLINE __attribute__((noinline))
+#else
+#define PURE_LIKELY(x) (x)
+#define PURE_UNLIKELY(x) (x)
+#ifdef _MSC_VER
+#define PURE_NOINLINE __declspec(noinline)
+#else
+#define PURE_NOINLINE
+#endif
+#endif
+
 /* Variables that the pure program (pure.cc) uses from libpure. A Windows
    program sees a DLL's variables only through declarations marked
    dllimport; MinGW's linker imports them automatically. */
@@ -60,7 +76,7 @@ public:
   per_thread(const per_thread&) = delete;
   per_thread& operator=(const per_thread&) = delete;
   ~per_thread() { delete p; p = nullptr; }
-  T& get() { if (__builtin_expect(!p, 0)) p = new T(); return *p; }
+  T& get() { if (PURE_UNLIKELY(!p)) p = new T(); return *p; }
   T *operator->() { return &get(); }
 };
 

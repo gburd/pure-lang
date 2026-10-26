@@ -836,7 +836,7 @@ public:
   // g_interp, so the compare folds away and ectx() is a single load.
   inline pure_ectx& ectx()
   {
-    if (__builtin_expect(this == g_interp.p, 1)) return *g_interp.e;
+    if (PURE_LIKELY(this == g_interp.p)) return *g_interp.e;
     return ectx_slow();
   }
   // Out-of-line slow path of ectx() (interpreter.cc): the arena of an

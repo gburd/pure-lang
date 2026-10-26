@@ -570,8 +570,8 @@ static void check_signals();
 	interpreter::stackdir*(&test - interpreter::baseptr)		\
 	>= interpreter::stackmax)					\
     pure_throw(stack_exception());					\
-  else if (__builtin_expect((interpreter::brkmask | interpreter::brkflag) != 0 \
-			    || pure_interrupt_hook, 0))		\
+  else if (PURE_UNLIKELY((interpreter::brkmask | interpreter::brkflag) != 0 \
+			    || pure_interrupt_hook))		\
     check_signals()
 
 // Debug expression allocations. Warns about expression memory leaks.
@@ -649,7 +649,7 @@ static inline pure_expr* signal_exception(int sig)
   return pure_apply2(f, x);
 }
 
-static __attribute__((noinline)) void check_signals()
+static PURE_NOINLINE void check_signals()
 {
   if (interpreter::brkmask) {
     if (interpreter::brkmask == 2) interpreter::brkmask = 0;
@@ -9714,12 +9714,13 @@ struct hdrdata {
 
 struct data1 {
   int32_t tag;
-  mysize_t n __attribute__ ((aligned (8)));
+  alignas(8) mysize_t n;
 };
 
 struct data2 {
   int32_t tag;
-  mysize_t n1 __attribute__ ((aligned (8))), n2;
+  alignas(8) mysize_t n1;
+  mysize_t n2;
 };
 
 struct symdata {
@@ -9732,7 +9733,7 @@ struct symentry {
   myprec_t prec;
   myfix_t fix;
   mybool priv;
-  const char *s __attribute__ ((aligned (8)));
+  alignas(8) const char *s;
 };
 
 struct symentrydata {
@@ -9740,7 +9741,7 @@ struct symentrydata {
   myprec_t prec;
   myfix_t fix;
   mybool priv;
-  mysize_t offs __attribute__ ((aligned (8)));
+  alignas(8) mysize_t offs;
 };
 
 struct Blob {
