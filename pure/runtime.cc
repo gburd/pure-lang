@@ -1213,7 +1213,10 @@ static void set_last_exception(pure_ectx& ectx, pure_expr *e)
 }
 
 /* Finish a guarded host call: on failure, keep the exception for
-   pure_last_exception() and release the caller's reference. */
+   pure_last_exception() and release the caller's reference. Call the
+   x-variant in a statement of its own and pass its out-parameter after
+   that: in host_call_done(pure_appx(..., &e), e) the order in which the
+   arguments are evaluated is unspecified, and GCC reads e first. */
 static inline pure_expr *host_call_done(pure_expr *res, pure_expr *e)
 {
   // The x-variants hand back the exception unreferenced (refc 0), like a
@@ -1230,7 +1233,8 @@ pure_expr *pure_symbol(int32_t tag)
 {
   if (pure_have_handler()) return pure_symbol_internal(tag);
   pure_expr *e = 0;
-  return host_call_done(pure_symbolx(tag, &e), e);
+  pure_expr *res = pure_symbolx(tag, &e);
+  return host_call_done(res, e);
 }
 
 static pure_expr *pure_symbol_internal(int32_t tag)
@@ -2454,7 +2458,8 @@ pure_expr *pure_funcall(void *f, uint32_t n, ...)
     for (uint32_t i = 0; i < n; i++) argv[i] = va_arg(ap, pure_expr*);
     va_end(ap);
     pure_expr *e = 0;
-    return host_call_done(pure_funcallv_x(f, n, argv, &e), e);
+    pure_expr *res = pure_funcallv_x(f, n, argv, &e);
+    return host_call_done(res, e);
   }
   va_list ap;
   pure_expr **argv = (pure_expr**)alloca((n+1)*sizeof(pure_expr*));
@@ -2515,7 +2520,8 @@ pure_expr *pure_app(pure_expr *fun, pure_expr *arg)
 {
   if (pure_have_handler()) return pure_apply2(fun, arg);
   pure_expr *e = 0;
-  return host_call_done(pure_appx(fun, arg, &e), e);
+  pure_expr *res = pure_appx(fun, arg, &e);
+  return host_call_done(res, e);
 }
 
 extern "C"
@@ -2535,7 +2541,8 @@ pure_expr *pure_appv(pure_expr *fun, size_t argc, pure_expr **args)
 {
   if (!pure_have_handler()) {
     pure_expr *e = 0;
-    return host_call_done(pure_appxv(fun, argc, args, &e), e);
+    pure_expr *res = pure_appxv(fun, argc, args, &e);
+    return host_call_done(res, e);
   }
   pure_expr *y = fun;
   for (size_t i = 0; i < argc; i++)
@@ -6103,7 +6110,8 @@ pure_expr *pure_force(pure_expr *x)
 {
   if (pure_have_handler()) return pure_force_internal(x);
   pure_expr *e = 0;
-  return host_call_done(pure_forcex(x, &e), e);
+  pure_expr *res = pure_forcex(x, &e);
+  return host_call_done(res, e);
 }
 
 static pure_expr *pure_force_internal(pure_expr *x)
