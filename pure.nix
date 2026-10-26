@@ -75,6 +75,9 @@ stdenv.mkDerivation {
 
   enableParallelBuilding = true;
 
+  # Run "make check" (the 96 regression tests) as part of the build.
+  doCheck = true;
+
   meta = with lib; {
     description =
       "Pure programming language interpreter "
