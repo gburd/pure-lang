@@ -125,15 +125,31 @@ static PURE_TLS_HOT thread_local
 // printer.cc call site).
 __attribute__((noinline)) pure_ectx& interpreter::ectx_slow()
 {
-  pure_ectx& e = ectx_cache.get()[id];
-  last_ectx_id = id;
-  last_ectx_ptr = &e;
-  return e;
+  return ectx_cache.get()[id];
+}
+
+pure_active_interp& pure_active_interp::operator=(interpreter *q)
+{
+  if (q && q->id != eid) {
+    e = &ectx_cache.get()[q->id];
+    eid = q->id;
+  }
+  p = q;
+  return *this;
+}
+
+void pure_active_interp::check()
+{
+  if (p && eid != p->id) *this = p;
 }
 
 void interpreter::purge_ectx()
 {
-  if (id == last_ectx_id) { last_ectx_id = 0; last_ectx_ptr = 0; }
+  if (g_interp.eid == id) {
+    // ~interpreter resets g_interp right after this anyway.
+    if (g_interp.p == this) g_interp.p = nullptr;
+    g_interp.e = nullptr; g_interp.eid = 0;
+  }
   ectx_cache->erase(id);
 }
 
@@ -207,6 +223,9 @@ void interpreter::init()
   // so several threads may construct interpreters concurrently (as an
   // embedding host that spawns one interpreter per plugin instance does).
   compile_lock_guard _init_guard;
+  // A deleted interpreter may still be this thread's g_interp, at the
+  // address this one now has; its cached arena is not ours.
+  if (g_interp == this) g_interp.check();
   if (!g_interp) g_interp = this;
   if (!g_init) {
     stackdir = c_stack_dir();
@@ -1304,7 +1323,8 @@ void interpreter::swap_interpreters(interpreter *interp)
     if (g_interp) g_interp->save_context();
     g_interp = interp;
     if (interp) interp->restore_context();
-  }
+  } else
+    g_interp.check();
 }
 
 void interpreter::init_sys_vars(const string& version,

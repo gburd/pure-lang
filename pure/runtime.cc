@@ -4125,7 +4125,10 @@ void pure_switch_interp(pure_interp *interp)
     if (interpreter::g_interp) interpreter::g_interp->save_context();
     interpreter::g_interp = (interpreter*)interp;
     if (interpreter::g_interp) interpreter::g_interp->restore_context();
-  }
+  } else
+    // Already active by address; it may still be a new interpreter that
+    // took the place of a deleted one, so check the cached arena's id.
+    interpreter::g_interp.check();
   /* baseptr is now thread-local, so a fresh thread (or a fiber with its
      own stack) that has not yet run this interpreter starts with a null
      baseptr; initialize it to the current frame. We also refresh it if the
@@ -4221,7 +4224,7 @@ pure_interp *pure_unlock_interp(pure_interp *interp)
 extern "C"
 pure_interp *pure_current_interp()
 {
-  return (pure_interp*)interpreter::g_interp;
+  return (pure_interp*)(interpreter*)interpreter::g_interp;
 }
 
 extern "C"

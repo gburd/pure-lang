@@ -650,6 +650,40 @@ struct pure_ectx {
   }
 };
 
+// The active interpreter of a thread (interpreter::g_interp), together with
+// the single-slot cache in front of interpreter::ectx(): e is this thread's
+// arena of the interpreter with id eid, and whenever p is set, eid is p->id.
+// Assigning g_interp looks the arena up in ectx_cache (interpreter.cc)
+// unless it is already cached (reactivating the interpreter that was active
+// last); that happens when the active interpreter changes, not on the
+// evaluation hot path. check() redoes the lookup where the active
+// interpreter may have been replaced by a new interpreter at the same
+// address (pure_switch_interp, interpreter construction), and purge_ectx()
+// clears the slot when the arena is freed.
+//
+// Keeping the three in one TLS object lets the allocator hot path reach the
+// interpreter and its arena from one TLS address, with no compare against
+// `id` and no slow-path call: ectx() on the active interpreter is one load.
+// With initial-exec TLS each variable costs a GOT load of its offset from
+// the thread pointer (adrp+ldr on AArch64, a GOTTPOFF load on x86-64) before
+// the access itself; with the cache in two variables of its own, every
+// ectx() paid for three of them, a load of `id` and a compare.
+class pure_active_interp {
+  interpreter *p;
+  pure_ectx *e;
+  uint64_t eid;
+  friend class interpreter;
+public:
+  constexpr pure_active_interp() : p(nullptr), e(nullptr), eid(0) {}
+  pure_active_interp(const pure_active_interp&) = delete;
+  pure_active_interp& operator=(const pure_active_interp&) = delete;
+  pure_active_interp& operator=(interpreter *q);
+  operator interpreter*() const { return p; }
+  interpreter *operator->() const { return p; }
+  interpreter& operator*() const { return *p; }
+  void check();
+};
+
 class interpreter
 {
 public:
@@ -771,14 +805,17 @@ public:
   // embedding pattern) into one inlined pointer comparison; the map is
   // the correctness fallback for an actual interpreter switch on this
   // thread, and for enumeration/purge on interpreter deletion.
+  //
+  // The slot lives in g_interp (see pure_active_interp): the active
+  // interpreter's arena is always cached there. Hot callers get `this` from
+  // g_interp, so the compare folds away and ectx() is a single load.
   inline pure_ectx& ectx()
   {
-    if (__builtin_expect(id == last_ectx_id, 1)) return *last_ectx_ptr;
+    if (__builtin_expect(this == g_interp.p, 1)) return *g_interp.e;
     return ectx_slow();
   }
-  // Out-of-line slow path of ectx() (interpreter.cc): an interpreter switch
-  // on this thread. Kept out of line so ectx() stays a compare and a load
-  // and its callers (the allocator and refcount hot paths) stay inlinable.
+  // Out-of-line slow path of ectx() (interpreter.cc): the arena of an
+  // interpreter that is not the active one on this thread.
   pure_ectx& ectx_slow();
   // Drop this thread's cached ectx for this interpreter. Called from
   // ~interpreter() (by the destroying thread) so that if this
@@ -1532,7 +1569,7 @@ public:
   //     holds when libpure is linked at startup or dlopen'ed into a
   //     process with enough static TLS surplus (see PURE_TLS_HOT in
   //     util.hh for how small that surplus can be).
-  PURE_TLS_HOT static inline thread_local interpreter* g_interp = nullptr;
+  PURE_TLS_HOT static inline thread_local pure_active_interp g_interp;
   // not saved
   PURE_TLS_HOT static inline thread_local int brkflag = 0;
   PURE_TLS_HOT static inline thread_local int brkmask = 0;
@@ -1568,14 +1605,10 @@ private:
 
   // Per-thread ectx() cache (see the comment on ectx() above). One map
   // per thread -- mutated only by its own thread, so no lock is needed --
-  // plus a single-slot fast path in front of it. last_ectx_id==0 means
-  // the slot is empty (0 is never a valid `id`: new_id() starts at 1).
-  // The map is only touched on the slow path (an interpreter switch on this
-  // thread), so it lives on the heap, in interpreter.cc (ectx_cache; see
-  // per_thread in util.hh). The single-slot cache in front of it is on every
-  // hot path and is defined like g_interp above.
-  PURE_TLS_HOT static inline thread_local uint64_t last_ectx_id = 0;
-  PURE_TLS_HOT static inline thread_local pure_ectx *last_ectx_ptr = nullptr;
+  // plus a single-slot fast path in front of it, kept in g_interp (see
+  // pure_active_interp). The map is only touched on the slow path (an
+  // interpreter switch on this thread), so it lives on the heap, in
+  // interpreter.cc (ectx_cache; see per_thread in util.hh).
 
   // Utility functions to quickly save and restore the global state.
   struct globals {
@@ -1591,7 +1624,8 @@ private:
       g_interp = this;
       g_verbose = verbose;
       g_interactive = interactive;
-    }
+    } else
+      g_interp.check();
   }
   void restore_globals(globals& g)
   {
