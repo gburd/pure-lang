@@ -1594,7 +1594,15 @@ public:
   //     util.hh for how small that surplus can be).
   PURE_TLS_HOT static inline thread_local pure_active_interp g_interp;
   // not saved
+#ifdef _WIN32
+  // The Windows C runtimes run the handler of a console Ctrl-C (SIGINT,
+  // SIGBREAK) on a thread of their own, so a per-thread flag would never
+  // reach the thread running Pure code. A pending signal is process-wide
+  // there; the first Pure thread to check for it takes it.
+  static inline volatile int brkflag = 0;
+#else
   PURE_TLS_HOT static inline thread_local int brkflag = 0;
+#endif
   PURE_TLS_HOT static inline thread_local int brkmask = 0;
   PURE_TLS_HOT static inline thread_local char *baseptr = nullptr;
   // Genuinely global, read-only after startup.

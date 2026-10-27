@@ -10,7 +10,8 @@
    - repeated evaluation runs in bounded memory;
    - two interpreters can be used alternately on one thread, and one
      keeps working after the other is deleted;
-   - interpreters created, used and deleted on separate threads work.
+   - interpreters created, used and deleted on separate threads work;
+   - on Windows, a signal handled on another thread interrupts Pure code.
 
    Built and run by 'make check-embed'. Exits 0 on success. */
 
@@ -158,6 +159,45 @@ static void test_interrupt(void)
 	"the interrupt hook cancels an infinite loop");
 }
 
+#ifdef _WIN32
+#include <signal.h>
+/* The Windows C runtime runs the handler of a console Ctrl-C on a thread
+   of its own, as raise() on another thread does here. If the flag the
+   handler sets does not reach this thread, the deadline hook ends the
+   loop with 'signal 99' after 10 s instead. */
+static ULONGLONG deadline;
+
+static int deadline_hook(void)
+{
+  return GetTickCount64() > deadline ? 99 : 0;
+}
+
+static DWORD WINAPI raise_sigint(LPVOID arg)
+{
+  (void) arg;
+  Sleep(200);
+  raise(SIGINT);
+  return 0;
+}
+
+static void test_signal_thread(void)
+{
+  pure_expr *r;
+  HANDLE t;
+  pure_trap(1, SIGINT);
+  deadline = GetTickCount64() + 10000;
+  pure_set_interrupt_hook(deadline_hook);
+  t = CreateThread(NULL, 0, raise_sigint, NULL, 0, NULL);
+  r = pure_app(pure_symbol(pure_sym("loop")), pure_int(0));
+  WaitForSingleObject(t, INFINITE);
+  CloseHandle(t);
+  pure_set_interrupt_hook(0);
+  pure_trap(0, SIGINT);
+  check(r == 0 && is_app_int(pure_last_exception(), "signal", SIGINT),
+	"a signal handled on another thread interrupts Pure code");
+}
+#endif
+
 static void test_stack(void)
 {
   char base;
@@ -275,6 +315,9 @@ int main(void)
   f = pure_new(pure_symbol(pure_sym("double_all")));
   test_exceptions(h);
   test_interrupt();
+#ifdef _WIN32
+  test_signal_thread();
+#endif
   test_stack();
   test_memory(f);
   pure_free(h);
