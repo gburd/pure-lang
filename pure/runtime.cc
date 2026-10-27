@@ -6020,8 +6020,7 @@ static pure_expr *trampoline(interpreter& interp,
   }
   // create a new trampoline for handling tail calls
   fini = true;
-  ex = interp.push_aframe(ectx, ectx.sstk_sz);
-  ex->count = 1; ectx.nhandlers--; // trampoline frame, not a handler
+  ex = interp.push_aframe(ectx, ectx.sstk_sz, 1); // not a handler
   if (setjmp(ex->jmp)) {
     // landing pad of tail call
     x = ex->e; fp = ex->fp;

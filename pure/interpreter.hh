@@ -1677,14 +1677,16 @@ public:
   // Push and pop a frame on the activation stack of arena e, which is the
   // caller's ectx(). The trampoline does this on every indirect call that
   // is not a tail call, so these are inline and take the arena the caller
-  // already has instead of looking it up again.
-  static pure_aframe *push_aframe(pure_ectx& e, size_t sz)
+  // already has instead of looking it up again. A frame with count 0 is an
+  // exception handler and is counted in e.nhandlers; the trampoline pushes
+  // its frames with count 1, which leaves nhandlers alone.
+  static pure_aframe *push_aframe(pure_ectx& e, size_t sz, uint32_t count = 0)
   {
     pure_aframe *a = get_aframe(e);
     assert(a); a->e = 0; a->sz = sz;
-    a->fp = 0; a->n = a->m = a->count = 0; a->argv = 0;
+    a->fp = 0; a->n = a->m = 0; a->count = count; a->argv = 0;
     a->prev = e.astk; e.astk = a;
-    e.nhandlers++;
+    if (count == 0) e.nhandlers++;
     return a;
   }
 
