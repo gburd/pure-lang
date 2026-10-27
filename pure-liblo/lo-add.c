@@ -12,6 +12,11 @@
 /* For some reason mingw fails to link in the lo_server_thread stuff.
    Force it to. */
 void *__Pure_lo_server_thread_new() { return &lo_server_thread_new; }
+#ifdef _MSC_VER
+/* The Microsoft C runtime has no usleep. */
+#include <windows.h>
+#define usleep(us) Sleep((us) / 1000)
+#endif
 #endif
 
 /* XXXFIXME: This needs to be crosschecked against the liblo source. We need
