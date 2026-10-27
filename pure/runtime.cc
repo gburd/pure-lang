@@ -562,18 +562,17 @@ static int (*volatile pure_interrupt_hook)(void) = 0;
 // Stack base supplied by the host for this thread (pure_set_stack_limit),
 // or null to let pure_switch_interp derive it from the current frame.
 static thread_local char *host_stack_base = 0;
+// The signal half of checkall. It runs on entry to every compiled function,
+// so the common case (no mask, no signal, no hook) is one test of the three
+// words together and the rest is out of line in check_signals().
+static void check_signals();
 #define checkall(test) if (interpreter::stackmax > 0 &&			\
 	interpreter::stackdir*(&test - interpreter::baseptr)		\
 	>= interpreter::stackmax)					\
     pure_throw(stack_exception());					\
-  else if (interpreter::brkmask) {					\
-    if (interpreter::brkmask == 2) interpreter::brkmask = 0;		\
-  } else if (interpreter::brkflag)					\
-    pure_throw(signal_exception(interpreter::brkflag));		\
-  else if (pure_interrupt_hook) {					\
-    int _sig = pure_interrupt_hook();					\
-    if (_sig) pure_throw(signal_exception(_sig));			\
-  }
+  else if (__builtin_expect((interpreter::brkmask | interpreter::brkflag) != 0 \
+			    || pure_interrupt_hook, 0))		\
+    check_signals()
 
 // Debug expression allocations. Warns about expression memory leaks.
 // NOTE: Bookkeeping starts and ends at each toplevel pure_invoke call.
@@ -648,6 +647,18 @@ static inline pure_expr* signal_exception(int sig)
   pure_expr *f = pure_const(interpreter::g_interp->symtab.signal_sym().f);
   pure_expr *x = pure_int(sig);
   return pure_apply2(f, x);
+}
+
+static __attribute__((noinline)) void check_signals()
+{
+  if (interpreter::brkmask) {
+    if (interpreter::brkmask == 2) interpreter::brkmask = 0;
+  } else if (interpreter::brkflag)
+    pure_throw(signal_exception(interpreter::brkflag));
+  else if (pure_interrupt_hook) {
+    int sig = pure_interrupt_hook();
+    if (sig) pure_throw(signal_exception(sig));
+  }
 }
 
 static inline pure_expr* unresolved_exception()
