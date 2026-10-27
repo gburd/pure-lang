@@ -940,12 +940,12 @@ static inline bool pstr(ostream& os, pure_expr *x)
   map<int32_t,GlobalVar>::iterator it;
   if (f > 0 && (it = interp.globalvars.find(f)) != interp.globalvars.end() &&
       it->second.x && it->second.x->tag >= 0 && it->second.x->data.clos) {
-    pure_aframe *ex = interp.push_aframe(ectx.sstk_sz);
+    pure_aframe *ex = interp.push_aframe(ectx, ectx.sstk_sz);
     if (setjmp(ex->jmp)) {
       // caught an exception
       size_t sz = ex->sz;
       pure_expr* e = ex->e;
-      interp.pop_aframe();
+      interp.pop_aframe(ectx);
       if (e) pure_freenew(e);
       for (size_t i = ectx.sstk_sz; i-- > sz; )
 	if (ectx.sstk[i] && ectx.sstk[i]->refc > 0)
@@ -961,7 +961,7 @@ static inline bool pstr(ostream& os, pure_expr *x)
       // prematurely.
       pure_ref(x);
       pure_expr *y = pure_app(it->second.x, x);
-      interp.pop_aframe();
+      interp.pop_aframe(ectx);
       recursive = false;
       if (y) {
 	if (y->tag == EXPR::STR) {

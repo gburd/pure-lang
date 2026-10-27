@@ -1367,27 +1367,6 @@ void interpreter::init_sys_vars(const string& version,
   swap_interpreters(s_interp);
 }
 
-// Activation stack.
-
-pure_aframe *interpreter::push_aframe(size_t sz)
-{
-  pure_ectx& e = ectx();
-  pure_aframe *a = get_aframe(e);
-  assert(a); a->e = 0; a->sz = sz;
-  a->fp = 0; a->n = a->m = a->count = 0; a->argv = 0;
-  a->prev = e.astk; e.astk = a;
-  return a;
-}
-
-void interpreter::pop_aframe()
-{
-  pure_ectx& e = ectx();
-  pure_aframe *a = e.astk;
-  assert(a);
-  e.astk = a->prev;
-  free_aframe(e, a);
-}
-
 // Errors and warnings.
 
 void
@@ -13642,12 +13621,12 @@ pure_expr *interpreter::const_value_invoke(expr x, pure_expr*& e, bool quote)
   // Wrapper around const_value which catches possible exceptions while
   // evaluating lists and tuples.
   pure_ectx& ec = ectx();
-  pure_aframe *ex = push_aframe(ec.sstk_sz);
+  pure_aframe *ex = push_aframe(ec, ec.sstk_sz);
   if (setjmp(ex->jmp)) {
     // caught an exception
     size_t sz = ex->sz;
     e = ex->e;
-    pop_aframe();
+    pop_aframe(ec);
     if (e) pure_new(e);
     for (size_t i = ec.sstk_sz; i-- > sz; )
       if (ec.sstk[i] && ec.sstk[i]->refc > 0)
@@ -13657,7 +13636,7 @@ pure_expr *interpreter::const_value_invoke(expr x, pure_expr*& e, bool quote)
   } else {
     pure_expr *res = const_value(x, quote);
     // normal return
-    pop_aframe();
+    pop_aframe(ec);
     return res;
   }
 }

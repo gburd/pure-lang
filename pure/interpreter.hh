@@ -1323,8 +1323,6 @@ public:
   set<pure_expr*> mem_allocations;
 #endif
   map<int32_t,ExternInfo> externals;
-  pure_aframe *push_aframe(size_t sz);
-  void pop_aframe();
   llvm::Function *declare_extern(void *fp, string name, string restype,
 				 int n, ...);
   llvm::Function *declare_extern(int priv, string name, string restype,
@@ -1664,6 +1662,28 @@ private:
     else {
       a->prev = ectx.afreep; ectx.afreep = a;
     }
+  }
+
+public:
+  // Push and pop a frame on the activation stack of arena e, which is the
+  // caller's ectx(). The trampoline does this on every indirect call that
+  // is not a tail call, so these are inline and take the arena the caller
+  // already has instead of looking it up again.
+  static pure_aframe *push_aframe(pure_ectx& e, size_t sz)
+  {
+    pure_aframe *a = get_aframe(e);
+    assert(a); a->e = 0; a->sz = sz;
+    a->fp = 0; a->n = a->m = a->count = 0; a->argv = 0;
+    a->prev = e.astk; e.astk = a;
+    return a;
+  }
+
+  static void pop_aframe(pure_ectx& e)
+  {
+    pure_aframe *a = e.astk;
+    assert(a);
+    e.astk = a->prev;
+    free_aframe(e, a);
   }
 
   // Evaluation statistics.
