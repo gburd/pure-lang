@@ -190,6 +190,13 @@ endif
 PIC = @PIC@
 shared = @shared@
 
+# Keep libpure from exporting its LLVM symbols, so it cannot interpose on a
+# different LLVM linked into the same process (PostgreSQL's llvmjit, say).
+# configure sets this to the version-script flags where the linker supports
+# them (ELF, GNU-style), and leaves it empty otherwise (mingw, darwin, a
+# linker without --version-script). See libpure.ver.
+hide_llvm = @HIDE_LLVM@
+
 soname = -Wl,-soname,$(libpure_soname)
 LD_LIB_PATH = @LD_LIB_PATH@
 
@@ -230,7 +237,7 @@ Makefile.in acinclude.m4 aclocal.m4 configure.ac configure config.h.in \
 config/config.guess config/config.sub config/install-sh \
 $(SOURCE) $(EXTRA_SOURCE) w3centities.c strptime.c pure.cc pure_norl.cc \
 pure_main.c pure.1 pure.txt install-docs.sh run-tests.in \
-run-test.in pure.pc.in etc/pure-mode.el.in etc/flycheck-pure.el \
+run-test.in pure.pc.in libpure.ver etc/pure-mode.el.in etc/flycheck-pure.el \
 etc/pure.* etc/pure-*.xml etc/pure-highlight.lang \
 debian/* \
 examples/COPYING examples/Makefile.in examples/*.pure examples/*.purerc \
@@ -249,7 +256,7 @@ SEDFILES = INSTALL
 
 .PHONY: all elc clean realclean depend install uninstall install-docs \
 install-el install-elc uninstall-el uninstall-elc \
-strip dist distcheck cleanlogs logs check config
+strip dist distcheck cleanlogs logs check config check-no-llvm-exports
 
 # compilation
 
@@ -264,7 +271,7 @@ pure$(EXE): pure.o $(OBJECT)
 endif
 
 $(libpure): $(OBJECT)
-	$(CXX) $(shared) $(soname) -o $@ $(LDFLAGS) $(PTHREAD_CFLAGS) $(OBJECT) $(PCRE_LIBS) $(LLVM_LIBS) $(LLVM_LDFLAGS) $(LIBS) $(PTHREAD_LIBS)
+	$(CXX) $(shared) $(soname) $(hide_llvm) -o $@ $(LDFLAGS) $(PTHREAD_CFLAGS) $(OBJECT) $(PCRE_LIBS) $(LLVM_LIBS) $(LLVM_LDFLAGS) $(LIBS) $(PTHREAD_LIBS)
 ifneq ($(libpure), $(libpure_soname))
 	ln -sf $(libpure) $(libpure_soname)
 endif
@@ -618,9 +625,28 @@ test/embed$(EXE): test/embed.c runtime.h $(libpure)
 	$(srcdir)/test/embed.c $(LDFLAGS) -L. -l$(libpure_name) $(PTHREAD_LIBS)
 
 # Load libpure with dlopen, as plugin hosts do, and check that its TLS
-# segment fits the static TLS reserve (see test/dlopen.c).
-check-dlopen: test/dlopen$(EXE) $(libpure)
+# segment fits the static TLS reserve (see test/dlopen.c). Also check that the
+# LLVM symbols are hidden, so libpure cannot interpose on a host's own LLVM.
+check-dlopen: test/dlopen$(EXE) $(libpure) check-no-llvm-exports
 	PURELIB=$(srcdir)/lib ./test/dlopen$(EXE) ./$(libpure)
+
+# Fail if libpure re-exports any LLVM symbol (see libpure.ver). Only meaningful
+# where the symbols are hidden (ELF with a version-script-capable linker) and
+# where nm is available; skip otherwise rather than fail.
+check-no-llvm-exports: $(libpure)
+	@if test -z "$(hide_llvm)"; then \
+	  echo "check-no-llvm-exports: skipped (LLVM symbols not hidden on this host)"; \
+	elif ! command -v nm >/dev/null 2>&1; then \
+	  echo "check-no-llvm-exports: skipped (nm not found)"; \
+	else \
+	  n=`nm -D --defined-only $(libpure) 2>/dev/null | grep -E '[0-9]llvm|LLVM' | wc -l`; \
+	  if test "$$n" -ne 0; then \
+	    echo "check-no-llvm-exports: FAIL: libpure exports $$n LLVM symbol(s):" >&2; \
+	    nm -D --defined-only $(libpure) 2>/dev/null | grep -E '[0-9]llvm|LLVM' | head >&2; \
+	    exit 1; \
+	  fi; \
+	  echo "check-no-llvm-exports: ok (0 LLVM symbols exported)"; \
+	fi
 
 test/dlopen$(EXE): test/dlopen.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(PTHREAD_CFLAGS) -o $@ \

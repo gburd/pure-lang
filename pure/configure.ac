@@ -382,6 +382,44 @@ LLVM_LIBS="$($LLVMCONF --ldflags --libs core bitreader bitwriter linker orcjit p
 LLVM_EXE_LIBS=${LLVM_SYS_LIBS}
 fi
 AC_SUBST(LLVM_LIBS)
+
+dnl Hide libpure's LLVM symbols from the dynamic symbol table, so that libpure
+dnl cannot interpose on a different LLVM linked into the same process. A host
+dnl that JIT-compiles with its own LLVM (PostgreSQL's llvmjit, say) and also
+dnl loads libpure would otherwise bind its LLVM references to libpure's copies;
+dnl at process exit one LLVM tears down objects the other built and the process
+dnl crashes. The version script (libpure.ver) keeps the pure_* API exported and
+dnl makes the llvm:: template instances (and any LLVM C API that leaks through)
+dnl local. This needs a GNU-style linker; test for it rather than matching the
+dnl host, since e.g. the illumos system linker does not take --version-script.
+dnl When it is in effect, the pure executable links LLVM directly instead of
+dnl resolving it through libpure's (now hidden) exports.
+HIDE_LLVM=
+case $host in
+*-darwin* | *-*-mingw* | *-*-cygwin*) ;;
+*)
+  AC_MSG_CHECKING([whether the linker hides symbols with a version script])
+  save_LDFLAGS=$LDFLAGS
+  cat > conftest.ver <<_ACEOF
+{ global: pure_*; local: *; };
+_ACEOF
+  LDFLAGS="$LDFLAGS -shared -fPIC -Wl,-Bsymbolic -Wl,--version-script=conftest.ver"
+  AC_LANG_PUSH([C++])
+  AC_LINK_IFELSE([AC_LANG_SOURCE([[extern "C" int pure_probe(){return 0;}]])],
+    [HIDE_LLVM='-Wl,-Bsymbolic -Wl,--version-script=$(srcdir)/libpure.ver'
+     AC_MSG_RESULT([yes])],
+    [AC_MSG_RESULT([no])])
+  AC_LANG_POP([C++])
+  LDFLAGS=$save_LDFLAGS
+  rm -f conftest.ver
+  ;;
+esac
+dnl With the LLVM symbols hidden, the pure executable can no longer pick up
+dnl LLVM through libpure, so link it against the LLVM libraries directly.
+if test -n "$HIDE_LLVM"; then
+  LLVM_EXE_LIBS="$LLVM_LIBS"
+fi
+AC_SUBST(HIDE_LLVM)
 AC_SUBST(LLVM_EXE_LIBS)
 
 LLVM_FLAGS=$($LLVMCONF --cppflags | sed -e s/-DNDEBUG//g)
