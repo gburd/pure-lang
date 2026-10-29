@@ -908,7 +908,8 @@ interpreter::interpreter(int _argc, char **_argv)
     eager_jit(false), interactive(false), debugging(false), texmacs(false),
     symbolic(true), checks(true), folding(true), consts(true),
     bigints(false), use_fastcc(true),
-    pic(*PURE_PIC), strip(true), restricted(false), ttymode(false),
+    pic(*PURE_PIC), strip(true), restricted(false), safe(false), safe_armed(false),
+    ttymode(false),
     override(false),
     stats(false), stats_mem(false), temp(0),  ps("> "), libdir(""),
     histfile("/.pure_history"), modname("pure"),
@@ -934,7 +935,7 @@ interpreter::interpreter(int32_t nsyms, char *syms,
     eager_jit(false), interactive(false), debugging(false), texmacs(false),
     symbolic(true), checks(true), folding(true), consts(true),
     bigints(false), use_fastcc(true),
-    pic(*PURE_PIC), strip(true), restricted(true), ttymode(false), override(false),
+    pic(*PURE_PIC), strip(true), restricted(true), safe(false), safe_armed(false), ttymode(false), override(false),
     stats(false), stats_mem(false), temp(0), ps("> "), libdir(""),
     histfile("/.pure_history"), modname("pure"),
     interactive_mode(false), escape_mode(0),
@@ -2940,6 +2941,10 @@ static string tool_prefix = TOOL_PREFIX;
 
 void interpreter::inline_code(bool priv, string &code)
 {
+  // Inline code compiles arbitrary C/C++/Fortran/ATS/Faust and links it in,
+  // another route straight out of the language; refuse it in armed safe mode.
+  if (safe_armed)
+    throw err("inline code is not allowed in safe mode");
   // Get the language tag and configure accordingly.
   string modname, tag = lang_tag(code, modname), ext = "", optargs = "";
   string intermediate_ext = "";
@@ -3143,6 +3148,27 @@ pure_expr* interpreter::run(int priv, const string &_s,
 			    bool check, bool sticky)
 {
   string s = unixize(_s);
+  // In armed safe mode, a using clause may only load a module whose bare name
+  // the host allowlisted (pure_safe_allow_using). Native modules (lib:, bc:,
+  // dsp:) load machine code and are always refused; a path (containing '/' or
+  // a drive/scheme ':') is refused so code cannot read arbitrary files.
+  if (safe_armed) {
+    size_t c = s.find(":");
+    if (c != string::npos &&
+	(s.substr(0, c) == "lib" || s.substr(0, c) == "bc" ||
+	 s.substr(0, c) == "dsp" || s.substr(0, c) == "sys"))
+      throw err("using "+s.substr(0, c)+": is not allowed in safe mode");
+    if (s.find('/') != string::npos || s.find(':') != string::npos)
+      throw err("using a file path is not allowed in safe mode");
+    // Compare against the bare module name (no .pure suffix), since the name
+    // is resolved to <name>.pure on the way in.
+    string base = s;
+    if (base.size() > strlen(PUREEXT) &&
+	base.substr(base.size()-strlen(PUREEXT)) == PUREEXT)
+      base = base.substr(0, base.size()-strlen(PUREEXT));
+    if (safe_using.find(base) == safe_using.end())
+      throw err("module '"+s+"' is not on the safe-mode allowlist");
+  }
   // check for library modules
   size_t p = s.find(":");
   if (p != string::npos && s.substr(0, p) == "lib") {
@@ -12583,6 +12609,38 @@ Function *interpreter::declare_extern(void *fp, string name, string restype,
   return declare_extern(-1, name, restype, argtypes, varargs, fp);
 }
 
+/* Externs a safe (sandboxed) interpreter refuses, because they let Pure code
+   reach outside the language: process control and exec, raw memory and pointer
+   access, the filesystem, the environment, and signals. Matched by exact name
+   or by a dangerous prefix (the pointer_get_/pointer_put_ families, the exec
+   family). This is a denylist of the C functions the standard prelude and the
+   common modules bind; it is intentionally broad. The curated prelude a host
+   ultimately ships would not declare these at all -- see the safe-mode notes
+   in runtime.h. */
+static bool is_unsafe_extern(const string& name)
+{
+  static const char *const exact[] = {
+    "exit", "_exit", "_Exit", "abort", "quick_exit", "atexit",
+    "system", "popen", "pclose", "fork", "vfork", "wait", "waitpid",
+    "malloc", "calloc", "realloc", "free", "reallocarray",
+    "mmap", "munmap", "mprotect", "brk", "sbrk",
+    "fopen", "freopen", "fdopen", "open", "openat", "creat", "close",
+    "read", "write", "remove", "unlink", "unlinkat", "rename", "renameat",
+    "getenv", "setenv", "unsetenv", "putenv", "secure_getenv",
+    "signal", "sigaction", "raise", "kill", "alarm",
+    "dlopen", "dlsym", "dlclose", "pointer_cast", "pointer",
+    0
+  };
+  static const char *const prefix[] = {
+    "pointer_get_", "pointer_put_", "exec", "spawn", 0
+  };
+  for (int i = 0; exact[i]; i++)
+    if (name == exact[i]) return true;
+  for (int i = 0; prefix[i]; i++)
+    if (name.compare(0, strlen(prefix[i]), prefix[i]) == 0) return true;
+  return false;
+}
+
 Function *interpreter::declare_extern(int priv, string name, string restype,
 				      const list<string>& argtypes,
 				      bool varargs, void *fp,
@@ -12590,6 +12648,18 @@ Function *interpreter::declare_extern(int priv, string name, string restype,
 {
   // translate type names to LLVM types
   size_t n = argtypes.size();
+  // Safe mode blocks the routes out of the language. Once armed (running
+  // untrusted code) every extern is refused with an error. During the trusted
+  // phase before arming, while the prelude and allowlisted modules load, the
+  // externs that breach the sandbox (process control, raw memory and pointer
+  // access, the filesystem, ...) are silently skipped, so they never bind to
+  // their C function; clearing a symbol later would not unbind an extern
+  // already in the JIT. The prelude functions built on them (get_byte, malloc,
+  // ...) are then left undefined in a safe interpreter, which is intended.
+  if (safe_armed)
+    throw err("extern is not allowed in safe mode");
+  if (safe && is_unsafe_extern(name))
+    return 0;
   llvm::Type* type = named_type(restype);
   vector<llvm::Type*> argt(n);
   list<string>::const_iterator atype = argtypes.begin();

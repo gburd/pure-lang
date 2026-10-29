@@ -250,13 +250,13 @@ examples/ats_list_demo/Makefile examples/ats_list_demo/*.pure \
 examples/ats_list_demo/*/*/*.*ats \
 texmacs/packages/*.ts texmacs/plugins/pure/doc/*.tm \
 texmacs/plugins/pure/progs/*.scm texmacs/plugins/pure/progs/*.pure \
-lib/*.pure test/*.pure test/*.log test/*.blob test/dlopen.c test/embed.c
+lib/*.pure test/*.pure test/*.log test/*.blob test/dlopen.c test/embed.c test/safe.c
 # These need special editing (see dist target, datesubst below).
 SEDFILES = INSTALL
 
 .PHONY: all elc clean realclean depend install uninstall install-docs \
 install-el install-elc uninstall-el uninstall-elc \
-strip dist distcheck cleanlogs logs check config check-no-llvm-exports
+strip dist distcheck cleanlogs logs check config check-no-llvm-exports check-safe
 
 # compilation
 
@@ -345,7 +345,7 @@ install.txt: INSTALL
 # cleaning
 
 clean:
-	rm -f *~ *.bak pure$(EXE) test/embed$(EXE) test/dlopen$(EXE) $(OBJECT) pure.o pure_main.o $(libpure_lnkname) $(libpure_soname) $(libpure) parser.output etc/pure-mode.elc etc/flycheck-pure.elc texmacs/plugins/pure/*/*~
+	rm -f *~ *.bak pure$(EXE) test/embed$(EXE) test/dlopen$(EXE) test/safe$(EXE) $(OBJECT) pure.o pure_main.o $(libpure_lnkname) $(libpure_soname) $(libpure) parser.output etc/pure-mode.elc etc/flycheck-pure.elc texmacs/plugins/pure/*/*~
 
 distclean: clean
 	rm -f Makefile config.h config.log config.status etc/pure-mode.el $(dist).tar.gz
@@ -651,6 +651,18 @@ check-no-llvm-exports: $(libpure)
 test/dlopen$(EXE): test/dlopen.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(PTHREAD_CFLAGS) -o $@ \
 	$(srcdir)/test/dlopen.c $(LDFLAGS) $(DL_LIBS) $(PTHREAD_LIBS)
+
+# Safe (sandbox) mode: a host creates a --safe interpreter, loads the modules
+# it trusts, arms the sandbox, and then untrusted Pure code cannot reach out of
+# the language (see test/safe.c and the safe-mode notes in runtime.h).
+check-safe: test/safe$(EXE)
+	LD_LIBRARY_PATH=$(abspath .):$$LD_LIBRARY_PATH \
+	DYLD_LIBRARY_PATH=$(abspath .):$$DYLD_LIBRARY_PATH \
+	PURELIB=$(abspath $(srcdir)/lib) ./test/safe$(EXE)
+
+test/safe$(EXE): test/safe.c runtime.h $(libpure)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(PTHREAD_CFLAGS) -I$(srcdir) -o $@ \
+	$(srcdir)/test/safe.c $(LDFLAGS) -L. -l$(libpure_name) $(PTHREAD_LIBS)
 
 recheck: pure
 	./run-tests -f $(rtflags)

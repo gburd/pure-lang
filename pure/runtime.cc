@@ -1365,6 +1365,40 @@ void pure_set_interrupt_hook(int (*hook)(void))
   pure_interrupt_hook = hook;
 }
 
+/* Safe (sandboxed) mode, for a host that runs untrusted Pure code (a trusted
+   SQL procedural language, say). The host creates the interpreter with the
+   --safe flag, loads a curated prelude and whatever modules it trusts (calling
+   pure_safe_allow_using for each module an armed interpreter may still load by
+   name), then calls pure_safe_arm. From that point the interpreter refuses the
+   routes out of the language: extern declarations, inline C/C++/Fortran code,
+   eval and evalcmd, and using of native modules (lib:, bc:, dsp:) or modules
+   not on the allowlist. These return false/do nothing if the interpreter was
+   not created with --safe. */
+extern "C"
+int pure_is_safe(void)
+{
+  interpreter* interp = interpreter::g_interp;
+  return interp && interp->safe;
+}
+
+extern "C"
+int pure_safe_arm(void)
+{
+  interpreter* interp = interpreter::g_interp;
+  if (!interp || !interp->safe) return 0;
+  interp->safe_armed = true;
+  return 1;
+}
+
+extern "C"
+int pure_safe_allow_using(const char *name)
+{
+  interpreter* interp = interpreter::g_interp;
+  if (!interp || !interp->safe || !name) return 0;
+  interp->safe_using.insert(name);
+  return 1;
+}
+
 extern "C"
 void pure_set_stack_limit(void *base, size_t size)
 {
@@ -3981,6 +4015,14 @@ pure_interp *pure_create_interp(int argc, char *argv[])
 	interp.symbolic = true;
       else if (strcmp(arg, "--nochecks") == 0)
 	interp.checks = false;
+      else if (strcmp(arg, "--safe") == 0) {
+	// Sandboxed mode for an untrusted host. Record it and make the source
+	// option 'safe' true so a curated prelude and modules can guard their
+	// dangerous externs with #! --if safe. The hard gates are armed later
+	// by the host with pure_safe_arm(), after it has loaded its prelude.
+	interp.safe = true;
+	interp.enable("safe", true);
+      }
       else if (strcmp(arg, "--checks") == 0)
 	interp.checks = true;
       else if (strcmp(arg, "--noconst") == 0)
@@ -8880,6 +8922,8 @@ extern "C"
 pure_expr *eval(pure_expr *x)
 {
   assert(x);
+  if (interpreter::g_interp && interpreter::g_interp->safe_armed)
+    pure_throw(pure_symbol(pure_sym("safe_mode_violation")));
   char *s;
   if (pure_is_cstring_dup(x, &s)) {
     interpreter& interp = *interpreter::g_interp;
@@ -8941,6 +8985,8 @@ extern "C"
 pure_expr *evalcmd(pure_expr *x)
 {
   assert(x);
+  if (interpreter::g_interp && interpreter::g_interp->safe_armed)
+    pure_throw(pure_symbol(pure_sym("safe_mode_violation")));
   char *s;
   if (pure_is_cstring_dup(x, &s)) {
     interpreter& interp = *interpreter::g_interp;

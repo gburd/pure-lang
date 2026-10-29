@@ -752,6 +752,27 @@ void pure_clear_exception(void);
 
 void pure_set_interrupt_hook(int (*hook)(void));
 
+/* Safe (sandboxed) mode, for a host that runs untrusted Pure code. Create the
+   interpreter with the "--safe" argument. During setup the host loads a
+   curated prelude and the modules it trusts, calling pure_safe_allow_using for
+   each module name an armed interpreter may still load with a 'using' clause
+   (a bare name, resolved under the library path; no file path and no native
+   lib:/bc:/dsp: module). The host then calls pure_safe_arm. From that point
+   the interpreter refuses every route out of the language -- extern
+   declarations, inline code, eval and evalcmd, and using of native or
+   off-allowlist modules -- raising a Pure exception the host turns into an
+   error. The dangerous functions the prelude would otherwise bind (exit,
+   malloc, free, the raw pointer accessors, ...) are refused when the prelude
+   declares them, so they never reach their C function; a call to them stays an
+   unevaluated normal form. These functions are no-ops (returning 0) on an
+   interpreter that was not created with --safe. pure_is_safe reports whether
+   --safe is in effect. */
+
+int pure_is_safe(void);
+int pure_safe_arm(void);
+int pure_safe_allow_using(const char *name);
+
+
 /* Stack limit. Pure detects C stack overflow by comparing the current
    frame against a base address and a maximum depth (default: about 8 MB,
    or PURE_STACK in KB). When running on a host thread whose stack is

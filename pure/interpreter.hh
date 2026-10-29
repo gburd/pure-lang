@@ -726,6 +726,22 @@ public:
   bool pic;          // create position-independent code (batch compiler)
   bool strip;        // strip unused functions (batch compiler)
   bool restricted;   // restricted mode
+  bool safe;         // safe (sandboxed) mode, requested with --safe. It makes
+		     // the source option 'safe' true (so the prelude and
+		     // modules can guard dangerous externs with #! --if safe)
+		     // and lets the host load a curated prelude and an
+		     // allowlist of modules. The hard gates below do not fire
+		     // until the host arms them with pure_safe_arm(), which it
+		     // does after that trusted setup and before running any
+		     // untrusted Pure code.
+  bool safe_armed;   // safe mode is armed: refuse extern declarations, inline
+		     // code, eval/evalcmd and using of native (lib:/bc:/dsp:)
+		     // or off-allowlist modules, so untrusted Pure code cannot
+		     // reach outside the language.
+  std::set<std::string> safe_using;  // module names an armed safe interpreter
+		     // may still 'using'-load (bare names, resolved under the
+		     // library path); set with pure_safe_allow_using during
+		     // setup.
   bool ttymode;      // connected to a tty
   bool override;     // override mode
   bool stats;        // stats mode (print execution times)

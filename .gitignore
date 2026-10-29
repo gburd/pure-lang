@@ -41,6 +41,7 @@ pure/test/*.diff
 pure/test/embed
 pure/test/embed.d
 pure/test/dlopen
+pure/test/safe
 purepad/Debug
 purepad/Release
 purepad/*.ncb
